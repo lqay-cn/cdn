@@ -11811,4 +11811,6775 @@ Expected function or array of functions, received type ${typeof value}.`
               if (key in this._props) {
                 this._props[key] = toNumber(this._props[key]);
               }
-              (numberProps || (numberProps = /* @__PURE__ */ Object.
+              (numberProps || (numberProps = /* @__PURE__ */ Object.create(null)))[camelize(key)] = true;
+            }
+          }
+        }
+        this._numberProps = numberProps;
+        this._resolveProps(def);
+        if (this.shadowRoot) {
+          this._applyStyles(styles);
+        } else if (styles) {
+          warn(
+            "Custom element style injection is not supported when using shadowRoot: false"
+          );
+        }
+        this._mount(def);
+      };
+      const asyncDef = this._def.__asyncLoader;
+      if (asyncDef) {
+        this._pendingResolve = asyncDef().then((def) => {
+          def.configureApp = this._def.configureApp;
+          resolve(this._def = def, true);
+        });
+      } else {
+        resolve(this._def);
+      }
+    }
+    _mount(def) {
+      if (!def.name) {
+        def.name = "VueElement";
+      }
+      this._app = this._createApp(def);
+      this._inheritParentContext();
+      if (def.configureApp) {
+        def.configureApp(this._app);
+      }
+      this._app._ceVNode = this._createVNode();
+      this._app.mount(this._root);
+      const exposed = this._instance && this._instance.exposed;
+      if (!exposed) return;
+      for (const key in exposed) {
+        if (!hasOwn(this, key)) {
+          Object.defineProperty(this, key, {
+            // unwrap ref to be consistent with public instance behavior
+            get: () => unref(exposed[key])
+          });
+        } else {
+          warn(`Exposed property "${key}" already exists on custom element.`);
+        }
+      }
+    }
+    _resolveProps(def) {
+      const { props } = def;
+      const declaredPropKeys = isArray(props) ? props : Object.keys(props || {});
+      for (const key of Object.keys(this)) {
+        if (key[0] !== "_" && declaredPropKeys.includes(key)) {
+          this._setProp(key, this[key]);
+        }
+      }
+      for (const key of declaredPropKeys.map(camelize)) {
+        Object.defineProperty(this, key, {
+          get() {
+            return this._getProp(key);
+          },
+          set(val) {
+            this._setProp(key, val, true, !this._patching);
+          }
+        });
+      }
+    }
+    _setAttr(key) {
+      if (key.startsWith("data-v-")) return;
+      const has = this.hasAttribute(key);
+      let value = has ? this.getAttribute(key) : REMOVAL;
+      const camelKey = camelize(key);
+      if (has && this._numberProps && this._numberProps[camelKey]) {
+        value = toNumber(value);
+      }
+      this._setProp(camelKey, value, false, true);
+    }
+    /**
+     * @internal
+     */
+    _getProp(key) {
+      return this._props[key];
+    }
+    /**
+     * @internal
+     */
+    _setProp(key, val, shouldReflect = true, shouldUpdate = false) {
+      if (val !== this._props[key]) {
+        this._dirty = true;
+        if (val === REMOVAL) {
+          delete this._props[key];
+        } else {
+          this._props[key] = val;
+          if (key === "key" && this._app) {
+            this._app._ceVNode.key = val;
+          }
+        }
+        if (shouldUpdate && this._instance) {
+          this._update();
+        }
+        if (shouldReflect) {
+          const ob = this._ob;
+          if (ob) {
+            this._processMutations(ob.takeRecords());
+            ob.disconnect();
+          }
+          if (val === true) {
+            this.setAttribute(hyphenate(key), "");
+          } else if (typeof val === "string" || typeof val === "number") {
+            this.setAttribute(hyphenate(key), val + "");
+          } else if (!val) {
+            this.removeAttribute(hyphenate(key));
+          }
+          ob && ob.observe(this, { attributes: true });
+        }
+      }
+    }
+    _update() {
+      const vnode = this._createVNode();
+      if (this._app) vnode.appContext = this._app._context;
+      render(vnode, this._root);
+    }
+    _createVNode() {
+      const baseProps = {};
+      if (!this.shadowRoot) {
+        baseProps.onVnodeMounted = baseProps.onVnodeUpdated = this._renderSlots.bind(this);
+      }
+      const vnode = createVNode(this._def, extend(baseProps, this._props));
+      if (!this._instance) {
+        vnode.ce = (instance) => {
+          this._instance = instance;
+          instance.ce = this;
+          instance.isCE = true;
+          {
+            instance.ceReload = (newStyles) => {
+              if (this._styles) {
+                this._styles.forEach((s) => this._root.removeChild(s));
+                this._styles.length = 0;
+              }
+              this._styleAnchors.delete(this._def);
+              this._applyStyles(newStyles);
+              this._instance = null;
+              this._update();
+            };
+          }
+          const dispatch = (event, args) => {
+            this.dispatchEvent(
+              new CustomEvent(
+                event,
+                isPlainObject(args[0]) ? extend({ detail: args }, args[0]) : { detail: args }
+              )
+            );
+          };
+          instance.emit = (event, ...args) => {
+            dispatch(event, args);
+            if (hyphenate(event) !== event) {
+              dispatch(hyphenate(event), args);
+            }
+          };
+          this._setParent();
+        };
+      }
+      return vnode;
+    }
+    _applyStyles(styles, owner, parentComp) {
+      if (!styles) return;
+      if (owner) {
+        if (owner === this._def || this._styleChildren.has(owner)) {
+          return;
+        }
+        this._styleChildren.add(owner);
+      }
+      const nonce = this._nonce;
+      const root = this.shadowRoot;
+      const insertionAnchor = parentComp ? this._getStyleAnchor(parentComp) || this._getStyleAnchor(this._def) : this._getRootStyleInsertionAnchor(root);
+      let last = null;
+      for (let i = styles.length - 1; i >= 0; i--) {
+        const s = document.createElement("style");
+        if (nonce) s.setAttribute("nonce", nonce);
+        s.textContent = styles[i];
+        root.insertBefore(s, last || insertionAnchor);
+        last = s;
+        if (i === 0) {
+          if (!parentComp) this._styleAnchors.set(this._def, s);
+          if (owner) this._styleAnchors.set(owner, s);
+        }
+        {
+          if (owner) {
+            if (owner.__hmrId) {
+              if (!this._childStyles) this._childStyles = /* @__PURE__ */ new Map();
+              let entry = this._childStyles.get(owner.__hmrId);
+              if (!entry) {
+                this._childStyles.set(owner.__hmrId, entry = []);
+              }
+              entry.push(s);
+            }
+          } else {
+            (this._styles || (this._styles = [])).push(s);
+          }
+        }
+      }
+    }
+    _getStyleAnchor(comp) {
+      if (!comp) {
+        return null;
+      }
+      const anchor = this._styleAnchors.get(comp);
+      if (anchor && anchor.parentNode === this.shadowRoot) {
+        return anchor;
+      }
+      if (anchor) {
+        this._styleAnchors.delete(comp);
+      }
+      return null;
+    }
+    _getRootStyleInsertionAnchor(root) {
+      for (let i = 0; i < root.childNodes.length; i++) {
+        const node = root.childNodes[i];
+        if (!(node instanceof HTMLStyleElement)) {
+          return node;
+        }
+      }
+      return null;
+    }
+    /**
+     * Only called when shadowRoot is false
+     */
+    _parseSlots() {
+      const slots = this._slots = {};
+      let n;
+      while (n = this.firstChild) {
+        const slotName = n.nodeType === 1 && n.getAttribute("slot") || "default";
+        (slots[slotName] || (slots[slotName] = [])).push(n);
+        this.removeChild(n);
+      }
+    }
+    /**
+     * Only called when shadowRoot is false
+     */
+    _renderSlots() {
+      const outlets = this._getSlots();
+      const scopeId = this._instance.type.__scopeId;
+      for (let i = 0; i < outlets.length; i++) {
+        const o = outlets[i];
+        const slotName = o.getAttribute("name") || "default";
+        const content = this._slots[slotName];
+        const parent = o.parentNode;
+        if (content) {
+          for (const n of content) {
+            if (scopeId && n.nodeType === 1) {
+              const id = scopeId + "-s";
+              const walker = document.createTreeWalker(n, 1);
+              n.setAttribute(id, "");
+              let child;
+              while (child = walker.nextNode()) {
+                child.setAttribute(id, "");
+              }
+            }
+            parent.insertBefore(n, o);
+          }
+        } else {
+          while (o.firstChild) parent.insertBefore(o.firstChild, o);
+        }
+        parent.removeChild(o);
+      }
+    }
+    /**
+     * @internal
+     */
+    _getSlots() {
+      const roots = [this];
+      if (this._teleportTargets) {
+        roots.push(...this._teleportTargets);
+      }
+      const slots = /* @__PURE__ */ new Set();
+      for (const root of roots) {
+        const found = root.querySelectorAll("slot");
+        for (let i = 0; i < found.length; i++) {
+          slots.add(found[i]);
+        }
+      }
+      return Array.from(slots);
+    }
+    /**
+     * @internal
+     */
+    _injectChildStyle(comp, parentComp) {
+      this._applyStyles(comp.styles, comp, parentComp);
+    }
+    /**
+     * @internal
+     */
+    _beginPatch() {
+      this._patching = true;
+      this._dirty = false;
+    }
+    /**
+     * @internal
+     */
+    _endPatch() {
+      this._patching = false;
+      if (this._dirty && this._instance) {
+        this._update();
+      }
+    }
+    /**
+     * @internal
+     */
+    _hasShadowRoot() {
+      return this._def.shadowRoot !== false;
+    }
+    /**
+     * @internal
+     */
+    _removeChildStyle(comp) {
+      {
+        this._styleChildren.delete(comp);
+        this._styleAnchors.delete(comp);
+        if (this._childStyles && comp.__hmrId) {
+          const oldStyles = this._childStyles.get(comp.__hmrId);
+          if (oldStyles) {
+            oldStyles.forEach((s) => this._root.removeChild(s));
+            oldStyles.length = 0;
+          }
+        }
+      }
+    }
+  }
+  function useHost(caller) {
+    const instance = getCurrentInstance();
+    const el = instance && instance.ce;
+    if (el) {
+      return el;
+    } else {
+      if (!instance) {
+        warn(
+          `${caller || "useHost"} called without an active component instance.`
+        );
+      } else {
+        warn(
+          `${caller || "useHost"} can only be used in components defined via defineCustomElement.`
+        );
+      }
+    }
+    return null;
+  }
+  function useShadowRoot() {
+    const el = useHost("useShadowRoot") ;
+    return el && el.shadowRoot;
+  }
+
+  function useCssModule(name = "$style") {
+    {
+      {
+        warn(`useCssModule() is not supported in the global build.`);
+      }
+      return EMPTY_OBJ;
+    }
+  }
+
+  const positionMap = /* @__PURE__ */ new WeakMap();
+  const newPositionMap = /* @__PURE__ */ new WeakMap();
+  const moveCbKey = /* @__PURE__ */ Symbol("_moveCb");
+  const enterCbKey = /* @__PURE__ */ Symbol("_enterCb");
+  const decorate = (t) => {
+    delete t.props.mode;
+    return t;
+  };
+  const TransitionGroupImpl = /* @__PURE__ */ decorate({
+    name: "TransitionGroup",
+    props: /* @__PURE__ */ extend({}, TransitionPropsValidators, {
+      tag: String,
+      moveClass: String
+    }),
+    setup(props, { slots }) {
+      const instance = getCurrentInstance();
+      const state = useTransitionState();
+      let prevChildren;
+      let children;
+      onUpdated(() => {
+        if (!prevChildren.length) {
+          return;
+        }
+        const moveClass = props.moveClass || `${props.name || "v"}-move`;
+        if (!hasCSSTransform(
+          prevChildren[0].el,
+          instance.vnode.el,
+          moveClass
+        )) {
+          prevChildren = [];
+          return;
+        }
+        prevChildren.forEach(callPendingCbs);
+        prevChildren.forEach(recordPosition);
+        const movedChildren = prevChildren.filter(applyTranslation);
+        forceReflow(instance.vnode.el);
+        movedChildren.forEach((c) => {
+          const el = c.el;
+          const style = el.style;
+          addTransitionClass(el, moveClass);
+          style.transform = style.webkitTransform = style.transitionDuration = "";
+          const cb = el[moveCbKey] = (e) => {
+            if (e && e.target !== el) {
+              return;
+            }
+            if (!e || e.propertyName.endsWith("transform")) {
+              el.removeEventListener("transitionend", cb);
+              el[moveCbKey] = null;
+              removeTransitionClass(el, moveClass);
+            }
+          };
+          el.addEventListener("transitionend", cb);
+        });
+        prevChildren = [];
+      });
+      return () => {
+        const rawProps = toRaw(props);
+        const cssTransitionProps = resolveTransitionProps(rawProps);
+        let tag = rawProps.tag || Fragment;
+        prevChildren = [];
+        if (children) {
+          for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            if (child.el && child.el instanceof Element) {
+              prevChildren.push(child);
+              setTransitionHooks(
+                child,
+                resolveTransitionHooks(
+                  child,
+                  cssTransitionProps,
+                  state,
+                  instance
+                )
+              );
+              positionMap.set(child, getPosition(child.el));
+            }
+          }
+        }
+        children = slots.default ? getTransitionRawChildren(slots.default()) : [];
+        for (let i = 0; i < children.length; i++) {
+          const child = children[i];
+          if (child.key != null) {
+            setTransitionHooks(
+              child,
+              resolveTransitionHooks(child, cssTransitionProps, state, instance)
+            );
+          } else if (child.type !== Text) {
+            warn(`<TransitionGroup> children must be keyed.`);
+          }
+        }
+        return createVNode(tag, null, children);
+      };
+    }
+  });
+  const TransitionGroup = TransitionGroupImpl;
+  function callPendingCbs(c) {
+    const el = c.el;
+    if (el[moveCbKey]) {
+      el[moveCbKey]();
+    }
+    if (el[enterCbKey]) {
+      el[enterCbKey]();
+    }
+  }
+  function recordPosition(c) {
+    newPositionMap.set(c, getPosition(c.el));
+  }
+  function applyTranslation(c) {
+    const oldPos = positionMap.get(c);
+    const newPos = newPositionMap.get(c);
+    const dx = oldPos.left - newPos.left;
+    const dy = oldPos.top - newPos.top;
+    if (dx || dy) {
+      const el = c.el;
+      const s = el.style;
+      const rect = el.getBoundingClientRect();
+      let scaleX = 1;
+      let scaleY = 1;
+      if (el.offsetWidth) scaleX = rect.width / el.offsetWidth;
+      if (el.offsetHeight) scaleY = rect.height / el.offsetHeight;
+      if (!Number.isFinite(scaleX) || scaleX === 0) scaleX = 1;
+      if (!Number.isFinite(scaleY) || scaleY === 0) scaleY = 1;
+      if (Math.abs(scaleX - 1) < 0.01) scaleX = 1;
+      if (Math.abs(scaleY - 1) < 0.01) scaleY = 1;
+      s.transform = s.webkitTransform = `translate(${dx / scaleX}px,${dy / scaleY}px)`;
+      s.transitionDuration = "0s";
+      return c;
+    }
+  }
+  function getPosition(el) {
+    const rect = el.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.top
+    };
+  }
+  function hasCSSTransform(el, root, moveClass) {
+    const clone = el.cloneNode();
+    const _vtc = el[vtcKey];
+    if (_vtc) {
+      _vtc.forEach((cls) => {
+        cls.split(/\s+/).forEach((c) => c && clone.classList.remove(c));
+      });
+    }
+    moveClass.split(/\s+/).forEach((c) => c && clone.classList.add(c));
+    clone.style.display = "none";
+    const container = root.nodeType === 1 ? root : root.parentNode;
+    container.appendChild(clone);
+    const { hasTransform } = getTransitionInfo(clone);
+    container.removeChild(clone);
+    return hasTransform;
+  }
+
+  const getModelAssigner = (vnode) => {
+    const fn = vnode.props["onUpdate:modelValue"] || false;
+    return isArray(fn) ? (value) => invokeArrayFns(fn, value) : fn;
+  };
+  function onCompositionStart(e) {
+    e.target.composing = true;
+  }
+  function onCompositionEnd(e) {
+    const target = e.target;
+    if (target.composing) {
+      target.composing = false;
+      target.dispatchEvent(new Event("input"));
+    }
+  }
+  const assignKey = /* @__PURE__ */ Symbol("_assign");
+  function castValue(value, trim, number) {
+    if (trim) value = value.trim();
+    if (number) value = looseToNumber(value);
+    return value;
+  }
+  const vModelText = {
+    created(el, { modifiers: { lazy, trim, number } }, vnode) {
+      el[assignKey] = getModelAssigner(vnode);
+      const castToNumber = number || vnode.props && vnode.props.type === "number";
+      addEventListener(el, lazy ? "change" : "input", (e) => {
+        if (e.target.composing) return;
+        el[assignKey](castValue(el.value, trim, castToNumber));
+      });
+      if (trim || castToNumber) {
+        addEventListener(el, "change", () => {
+          el.value = castValue(el.value, trim, castToNumber);
+        });
+      }
+      if (!lazy) {
+        addEventListener(el, "compositionstart", onCompositionStart);
+        addEventListener(el, "compositionend", onCompositionEnd);
+        addEventListener(el, "change", onCompositionEnd);
+      }
+    },
+    // set value on mounted so it's after min/max for type="range"
+    mounted(el, { value }) {
+      el.value = value == null ? "" : value;
+    },
+    beforeUpdate(el, { value, oldValue, modifiers: { lazy, trim, number } }, vnode) {
+      el[assignKey] = getModelAssigner(vnode);
+      if (el.composing) return;
+      const elValue = (number || el.type === "number") && !/^0\d/.test(el.value) ? looseToNumber(el.value) : el.value;
+      const newValue = value == null ? "" : value;
+      if (elValue === newValue) {
+        return;
+      }
+      const rootNode = el.getRootNode();
+      if ((rootNode instanceof Document || rootNode instanceof ShadowRoot) && rootNode.activeElement === el && el.type !== "range") {
+        if (lazy && value === oldValue) {
+          return;
+        }
+        if (trim && el.value.trim() === newValue) {
+          return;
+        }
+      }
+      el.value = newValue;
+    }
+  };
+  const vModelCheckbox = {
+    // #4096 array checkboxes need to be deep traversed
+    deep: true,
+    created(el, _, vnode) {
+      el[assignKey] = getModelAssigner(vnode);
+      addEventListener(el, "change", () => {
+        const modelValue = el._modelValue;
+        const elementValue = getValue(el);
+        const checked = el.checked;
+        const assign = el[assignKey];
+        if (isArray(modelValue)) {
+          const index = looseIndexOf(modelValue, elementValue);
+          const found = index !== -1;
+          if (checked && !found) {
+            assign(modelValue.concat(elementValue));
+          } else if (!checked && found) {
+            const filtered = [...modelValue];
+            filtered.splice(index, 1);
+            assign(filtered);
+          }
+        } else if (isSet(modelValue)) {
+          const cloned = new Set(modelValue);
+          if (checked) {
+            cloned.add(elementValue);
+          } else {
+            cloned.delete(elementValue);
+          }
+          assign(cloned);
+        } else {
+          assign(getCheckboxValue(el, checked));
+        }
+      });
+    },
+    // set initial checked on mount to wait for true-value/false-value
+    mounted: setChecked,
+    beforeUpdate(el, binding, vnode) {
+      el[assignKey] = getModelAssigner(vnode);
+      setChecked(el, binding, vnode);
+    }
+  };
+  function setChecked(el, { value, oldValue }, vnode) {
+    el._modelValue = value;
+    let checked;
+    if (isArray(value)) {
+      checked = looseIndexOf(value, vnode.props.value) > -1;
+    } else if (isSet(value)) {
+      checked = value.has(vnode.props.value);
+    } else {
+      if (value === oldValue) return;
+      checked = looseEqual(value, getCheckboxValue(el, true));
+    }
+    if (el.checked !== checked) {
+      el.checked = checked;
+    }
+  }
+  const vModelRadio = {
+    created(el, { value }, vnode) {
+      el.checked = looseEqual(value, vnode.props.value);
+      el[assignKey] = getModelAssigner(vnode);
+      addEventListener(el, "change", () => {
+        el[assignKey](getValue(el));
+      });
+    },
+    beforeUpdate(el, { value, oldValue }, vnode) {
+      el[assignKey] = getModelAssigner(vnode);
+      if (value !== oldValue) {
+        el.checked = looseEqual(value, vnode.props.value);
+      }
+    }
+  };
+  const vModelSelect = {
+    // <select multiple> value need to be deep traversed
+    deep: true,
+    created(el, { value, modifiers: { number } }, vnode) {
+      const isSetModel = isSet(value);
+      addEventListener(el, "change", () => {
+        const selectedVal = Array.prototype.filter.call(el.options, (o) => o.selected).map(
+          (o) => number ? looseToNumber(getValue(o)) : getValue(o)
+        );
+        el[assignKey](
+          el.multiple ? isSetModel ? new Set(selectedVal) : selectedVal : selectedVal[0]
+        );
+        el._assigning = true;
+        nextTick(() => {
+          el._assigning = false;
+        });
+      });
+      el[assignKey] = getModelAssigner(vnode);
+    },
+    // set value in mounted & updated because <select> relies on its children
+    // <option>s.
+    mounted(el, { value }) {
+      setSelected(el, value);
+    },
+    beforeUpdate(el, _binding, vnode) {
+      el[assignKey] = getModelAssigner(vnode);
+    },
+    updated(el, { value }) {
+      if (!el._assigning) {
+        setSelected(el, value);
+      }
+    }
+  };
+  function setSelected(el, value) {
+    const isMultiple = el.multiple;
+    const isArrayValue = isArray(value);
+    if (isMultiple && !isArrayValue && !isSet(value)) {
+      warn(
+        `<select multiple v-model> expects an Array or Set value for its binding, but got ${Object.prototype.toString.call(value).slice(8, -1)}.`
+      );
+      return;
+    }
+    for (let i = 0, l = el.options.length; i < l; i++) {
+      const option = el.options[i];
+      const optionValue = getValue(option);
+      if (isMultiple) {
+        if (isArrayValue) {
+          const optionType = typeof optionValue;
+          if (optionType === "string" || optionType === "number") {
+            option.selected = value.some((v) => String(v) === String(optionValue));
+          } else {
+            option.selected = looseIndexOf(value, optionValue) > -1;
+          }
+        } else {
+          option.selected = value.has(optionValue);
+        }
+      } else if (looseEqual(getValue(option), value)) {
+        if (el.selectedIndex !== i) el.selectedIndex = i;
+        return;
+      }
+    }
+    if (!isMultiple && el.selectedIndex !== -1) {
+      el.selectedIndex = -1;
+    }
+  }
+  function getValue(el) {
+    return "_value" in el ? el._value : el.value;
+  }
+  function getCheckboxValue(el, checked) {
+    const key = checked ? "_trueValue" : "_falseValue";
+    return key in el ? el[key] : checked;
+  }
+  const vModelDynamic = {
+    created(el, binding, vnode) {
+      callModelHook(el, binding, vnode, null, "created");
+    },
+    mounted(el, binding, vnode) {
+      callModelHook(el, binding, vnode, null, "mounted");
+    },
+    beforeUpdate(el, binding, vnode, prevVNode) {
+      callModelHook(el, binding, vnode, prevVNode, "beforeUpdate");
+    },
+    updated(el, binding, vnode, prevVNode) {
+      callModelHook(el, binding, vnode, prevVNode, "updated");
+    }
+  };
+  function resolveDynamicModel(tagName, type) {
+    switch (tagName) {
+      case "SELECT":
+        return vModelSelect;
+      case "TEXTAREA":
+        return vModelText;
+      default:
+        switch (type) {
+          case "checkbox":
+            return vModelCheckbox;
+          case "radio":
+            return vModelRadio;
+          default:
+            return vModelText;
+        }
+    }
+  }
+  function callModelHook(el, binding, vnode, prevVNode, hook) {
+    const modelToUse = resolveDynamicModel(
+      el.tagName,
+      vnode.props && vnode.props.type
+    );
+    const fn = modelToUse[hook];
+    fn && fn(el, binding, vnode, prevVNode);
+  }
+
+  const systemModifiers = ["ctrl", "shift", "alt", "meta"];
+  const modifierGuards = {
+    stop: (e) => e.stopPropagation(),
+    prevent: (e) => e.preventDefault(),
+    self: (e) => e.target !== e.currentTarget,
+    ctrl: (e) => !e.ctrlKey,
+    shift: (e) => !e.shiftKey,
+    alt: (e) => !e.altKey,
+    meta: (e) => !e.metaKey,
+    left: (e) => "button" in e && e.button !== 0,
+    middle: (e) => "button" in e && e.button !== 1,
+    right: (e) => "button" in e && e.button !== 2,
+    exact: (e, modifiers) => systemModifiers.some((m) => e[`${m}Key`] && !modifiers.includes(m))
+  };
+  const withModifiers = (fn, modifiers) => {
+    if (!fn) return fn;
+    const cache = fn._withMods || (fn._withMods = {});
+    const cacheKey = modifiers.join(".");
+    return cache[cacheKey] || (cache[cacheKey] = ((event, ...args) => {
+      for (let i = 0; i < modifiers.length; i++) {
+        const guard = modifierGuards[modifiers[i]];
+        if (guard && guard(event, modifiers)) return;
+      }
+      return fn(event, ...args);
+    }));
+  };
+  const keyNames = {
+    esc: "escape",
+    space: " ",
+    up: "arrow-up",
+    left: "arrow-left",
+    right: "arrow-right",
+    down: "arrow-down",
+    delete: "backspace"
+  };
+  const withKeys = (fn, modifiers) => {
+    const cache = fn._withKeys || (fn._withKeys = {});
+    const cacheKey = modifiers.join(".");
+    return cache[cacheKey] || (cache[cacheKey] = ((event) => {
+      if (!("key" in event)) {
+        return;
+      }
+      const eventKey = hyphenate(event.key);
+      if (modifiers.some(
+        (k) => k === eventKey || keyNames[k] === eventKey
+      )) {
+        return fn(event);
+      }
+    }));
+  };
+
+  const rendererOptions = /* @__PURE__ */ extend({ patchProp }, nodeOps);
+  let renderer;
+  let enabledHydration = false;
+  function ensureRenderer() {
+    return renderer || (renderer = createRenderer(rendererOptions));
+  }
+  function ensureHydrationRenderer() {
+    renderer = enabledHydration ? renderer : createHydrationRenderer(rendererOptions);
+    enabledHydration = true;
+    return renderer;
+  }
+  const render = ((...args) => {
+    ensureRenderer().render(...args);
+  });
+  const hydrate = ((...args) => {
+    ensureHydrationRenderer().hydrate(...args);
+  });
+  const createApp = ((...args) => {
+    const app = ensureRenderer().createApp(...args);
+    {
+      injectNativeTagCheck(app);
+      injectCompilerOptionsCheck(app);
+    }
+    const { mount } = app;
+    app.mount = (containerOrSelector) => {
+      const container = normalizeContainer(containerOrSelector);
+      if (!container) return;
+      const component = app._component;
+      if (!isFunction(component) && !component.render && !component.template) {
+        component.template = container.innerHTML;
+      }
+      if (container.nodeType === 1) {
+        container.textContent = "";
+      }
+      const proxy = mount(container, false, resolveRootNamespace(container));
+      if (container instanceof Element) {
+        container.removeAttribute("v-cloak");
+        container.setAttribute("data-v-app", "");
+      }
+      return proxy;
+    };
+    return app;
+  });
+  const createSSRApp = ((...args) => {
+    const app = ensureHydrationRenderer().createApp(...args);
+    {
+      injectNativeTagCheck(app);
+      injectCompilerOptionsCheck(app);
+    }
+    const { mount } = app;
+    app.mount = (containerOrSelector) => {
+      const container = normalizeContainer(containerOrSelector);
+      if (container) {
+        return mount(container, true, resolveRootNamespace(container));
+      }
+    };
+    return app;
+  });
+  function resolveRootNamespace(container) {
+    if (container instanceof SVGElement) {
+      return "svg";
+    }
+    if (typeof MathMLElement === "function" && container instanceof MathMLElement) {
+      return "mathml";
+    }
+  }
+  function injectNativeTagCheck(app) {
+    Object.defineProperty(app.config, "isNativeTag", {
+      value: (tag) => isHTMLTag(tag) || isSVGTag(tag) || isMathMLTag(tag),
+      writable: false
+    });
+  }
+  function injectCompilerOptionsCheck(app) {
+    if (isRuntimeOnly()) {
+      const isCustomElement = app.config.isCustomElement;
+      Object.defineProperty(app.config, "isCustomElement", {
+        get() {
+          return isCustomElement;
+        },
+        set() {
+          warn(
+            `The \`isCustomElement\` config option is deprecated. Use \`compilerOptions.isCustomElement\` instead.`
+          );
+        }
+      });
+      const compilerOptions = app.config.compilerOptions;
+      const msg = `The \`compilerOptions\` config option is only respected when using a build of Vue.js that includes the runtime compiler (aka "full build"). Since you are using the runtime-only build, \`compilerOptions\` must be passed to \`@vue/compiler-dom\` in the build setup instead.
+- For vue-loader: pass it via vue-loader's \`compilerOptions\` loader option.
+- For vue-cli: see https://cli.vuejs.org/guide/webpack.html#modifying-options-of-a-loader
+- For vite: pass it via @vitejs/plugin-vue options. See https://github.com/vitejs/vite-plugin-vue/tree/main/packages/plugin-vue#example-for-passing-options-to-vuecompiler-sfc`;
+      Object.defineProperty(app.config, "compilerOptions", {
+        get() {
+          warn(msg);
+          return compilerOptions;
+        },
+        set() {
+          warn(msg);
+        }
+      });
+    }
+  }
+  function normalizeContainer(container) {
+    if (isString(container)) {
+      const res = document.querySelector(container);
+      if (!res) {
+        warn(
+          `Failed to mount app: mount target selector "${container}" returned null.`
+        );
+      }
+      return res;
+    }
+    if (window.ShadowRoot && container instanceof window.ShadowRoot && container.mode === "closed") {
+      warn(
+        `mounting on a ShadowRoot with \`{mode: "closed"}\` may lead to unpredictable bugs`
+      );
+    }
+    return container;
+  }
+  const initDirectivesForSSR = NOOP;
+
+  function initDev() {
+    {
+      {
+        console.info(
+          `You are running a development build of Vue.
+Make sure to use the production build (*.prod.js) when deploying for production.`
+        );
+      }
+      initCustomFormatter();
+    }
+  }
+
+  const FRAGMENT = /* @__PURE__ */ Symbol(`Fragment` );
+  const TELEPORT = /* @__PURE__ */ Symbol(`Teleport` );
+  const SUSPENSE = /* @__PURE__ */ Symbol(`Suspense` );
+  const KEEP_ALIVE = /* @__PURE__ */ Symbol(`KeepAlive` );
+  const BASE_TRANSITION = /* @__PURE__ */ Symbol(
+    `BaseTransition` 
+  );
+  const OPEN_BLOCK = /* @__PURE__ */ Symbol(`openBlock` );
+  const CREATE_BLOCK = /* @__PURE__ */ Symbol(`createBlock` );
+  const CREATE_ELEMENT_BLOCK = /* @__PURE__ */ Symbol(
+    `createElementBlock` 
+  );
+  const CREATE_VNODE = /* @__PURE__ */ Symbol(`createVNode` );
+  const CREATE_ELEMENT_VNODE = /* @__PURE__ */ Symbol(
+    `createElementVNode` 
+  );
+  const CREATE_COMMENT = /* @__PURE__ */ Symbol(
+    `createCommentVNode` 
+  );
+  const CREATE_TEXT = /* @__PURE__ */ Symbol(
+    `createTextVNode` 
+  );
+  const CREATE_STATIC = /* @__PURE__ */ Symbol(
+    `createStaticVNode` 
+  );
+  const RESOLVE_COMPONENT = /* @__PURE__ */ Symbol(
+    `resolveComponent` 
+  );
+  const RESOLVE_DYNAMIC_COMPONENT = /* @__PURE__ */ Symbol(
+    `resolveDynamicComponent` 
+  );
+  const RESOLVE_DIRECTIVE = /* @__PURE__ */ Symbol(
+    `resolveDirective` 
+  );
+  const RESOLVE_FILTER = /* @__PURE__ */ Symbol(
+    `resolveFilter` 
+  );
+  const WITH_DIRECTIVES = /* @__PURE__ */ Symbol(
+    `withDirectives` 
+  );
+  const RENDER_LIST = /* @__PURE__ */ Symbol(`renderList` );
+  const RENDER_SLOT = /* @__PURE__ */ Symbol(`renderSlot` );
+  const CREATE_SLOTS = /* @__PURE__ */ Symbol(`createSlots` );
+  const TO_DISPLAY_STRING = /* @__PURE__ */ Symbol(
+    `toDisplayString` 
+  );
+  const MERGE_PROPS = /* @__PURE__ */ Symbol(`mergeProps` );
+  const NORMALIZE_CLASS = /* @__PURE__ */ Symbol(
+    `normalizeClass` 
+  );
+  const NORMALIZE_STYLE = /* @__PURE__ */ Symbol(
+    `normalizeStyle` 
+  );
+  const NORMALIZE_PROPS = /* @__PURE__ */ Symbol(
+    `normalizeProps` 
+  );
+  const GUARD_REACTIVE_PROPS = /* @__PURE__ */ Symbol(
+    `guardReactiveProps` 
+  );
+  const TO_HANDLERS = /* @__PURE__ */ Symbol(`toHandlers` );
+  const CAMELIZE = /* @__PURE__ */ Symbol(`camelize` );
+  const CAPITALIZE = /* @__PURE__ */ Symbol(`capitalize` );
+  const TO_HANDLER_KEY = /* @__PURE__ */ Symbol(
+    `toHandlerKey` 
+  );
+  const SET_BLOCK_TRACKING = /* @__PURE__ */ Symbol(
+    `setBlockTracking` 
+  );
+  const PUSH_SCOPE_ID = /* @__PURE__ */ Symbol(`pushScopeId` );
+  const POP_SCOPE_ID = /* @__PURE__ */ Symbol(`popScopeId` );
+  const WITH_CTX = /* @__PURE__ */ Symbol(`withCtx` );
+  const UNREF = /* @__PURE__ */ Symbol(`unref` );
+  const IS_REF = /* @__PURE__ */ Symbol(`isRef` );
+  const WITH_MEMO = /* @__PURE__ */ Symbol(`withMemo` );
+  const IS_MEMO_SAME = /* @__PURE__ */ Symbol(`isMemoSame` );
+  const helperNameMap = {
+    [FRAGMENT]: `Fragment`,
+    [TELEPORT]: `Teleport`,
+    [SUSPENSE]: `Suspense`,
+    [KEEP_ALIVE]: `KeepAlive`,
+    [BASE_TRANSITION]: `BaseTransition`,
+    [OPEN_BLOCK]: `openBlock`,
+    [CREATE_BLOCK]: `createBlock`,
+    [CREATE_ELEMENT_BLOCK]: `createElementBlock`,
+    [CREATE_VNODE]: `createVNode`,
+    [CREATE_ELEMENT_VNODE]: `createElementVNode`,
+    [CREATE_COMMENT]: `createCommentVNode`,
+    [CREATE_TEXT]: `createTextVNode`,
+    [CREATE_STATIC]: `createStaticVNode`,
+    [RESOLVE_COMPONENT]: `resolveComponent`,
+    [RESOLVE_DYNAMIC_COMPONENT]: `resolveDynamicComponent`,
+    [RESOLVE_DIRECTIVE]: `resolveDirective`,
+    [RESOLVE_FILTER]: `resolveFilter`,
+    [WITH_DIRECTIVES]: `withDirectives`,
+    [RENDER_LIST]: `renderList`,
+    [RENDER_SLOT]: `renderSlot`,
+    [CREATE_SLOTS]: `createSlots`,
+    [TO_DISPLAY_STRING]: `toDisplayString`,
+    [MERGE_PROPS]: `mergeProps`,
+    [NORMALIZE_CLASS]: `normalizeClass`,
+    [NORMALIZE_STYLE]: `normalizeStyle`,
+    [NORMALIZE_PROPS]: `normalizeProps`,
+    [GUARD_REACTIVE_PROPS]: `guardReactiveProps`,
+    [TO_HANDLERS]: `toHandlers`,
+    [CAMELIZE]: `camelize`,
+    [CAPITALIZE]: `capitalize`,
+    [TO_HANDLER_KEY]: `toHandlerKey`,
+    [SET_BLOCK_TRACKING]: `setBlockTracking`,
+    [PUSH_SCOPE_ID]: `pushScopeId`,
+    [POP_SCOPE_ID]: `popScopeId`,
+    [WITH_CTX]: `withCtx`,
+    [UNREF]: `unref`,
+    [IS_REF]: `isRef`,
+    [WITH_MEMO]: `withMemo`,
+    [IS_MEMO_SAME]: `isMemoSame`
+  };
+  function registerRuntimeHelpers(helpers) {
+    Object.getOwnPropertySymbols(helpers).forEach((s) => {
+      helperNameMap[s] = helpers[s];
+    });
+  }
+
+  const locStub = {
+    start: { line: 1, column: 1, offset: 0 },
+    end: { line: 1, column: 1, offset: 0 },
+    source: ""
+  };
+  function createRoot(children, source = "") {
+    return {
+      type: 0,
+      source,
+      children,
+      helpers: /* @__PURE__ */ new Set(),
+      components: [],
+      directives: [],
+      hoists: [],
+      imports: [],
+      cached: [],
+      temps: 0,
+      codegenNode: void 0,
+      loc: locStub
+    };
+  }
+  function createVNodeCall(context, tag, props, children, patchFlag, dynamicProps, directives, isBlock = false, disableTracking = false, isComponent = false, loc = locStub) {
+    if (context) {
+      if (isBlock) {
+        context.helper(OPEN_BLOCK);
+        context.helper(getVNodeBlockHelper(context.inSSR, isComponent));
+      } else {
+        context.helper(getVNodeHelper(context.inSSR, isComponent));
+      }
+      if (directives) {
+        context.helper(WITH_DIRECTIVES);
+      }
+    }
+    return {
+      type: 13,
+      tag,
+      props,
+      children,
+      patchFlag,
+      dynamicProps,
+      directives,
+      isBlock,
+      disableTracking,
+      isComponent,
+      loc
+    };
+  }
+  function createArrayExpression(elements, loc = locStub) {
+    return {
+      type: 17,
+      loc,
+      elements
+    };
+  }
+  function createObjectExpression(properties, loc = locStub) {
+    return {
+      type: 15,
+      loc,
+      properties
+    };
+  }
+  function createObjectProperty(key, value) {
+    return {
+      type: 16,
+      loc: locStub,
+      key: isString(key) ? createSimpleExpression(key, true) : key,
+      value
+    };
+  }
+  function createSimpleExpression(content, isStatic = false, loc = locStub, constType = 0) {
+    return {
+      type: 4,
+      loc,
+      content,
+      isStatic,
+      constType: isStatic ? 3 : constType
+    };
+  }
+  function createCompoundExpression(children, loc = locStub) {
+    return {
+      type: 8,
+      loc,
+      children
+    };
+  }
+  function createCallExpression(callee, args = [], loc = locStub) {
+    return {
+      type: 14,
+      loc,
+      callee,
+      arguments: args
+    };
+  }
+  function createFunctionExpression(params, returns = void 0, newline = false, isSlot = false, loc = locStub) {
+    return {
+      type: 18,
+      params,
+      returns,
+      newline,
+      isSlot,
+      loc
+    };
+  }
+  function createConditionalExpression(test, consequent, alternate, newline = true) {
+    return {
+      type: 19,
+      test,
+      consequent,
+      alternate,
+      newline,
+      loc: locStub
+    };
+  }
+  function createCacheExpression(index, value, needPauseTracking = false, inVOnce = false) {
+    return {
+      type: 20,
+      index,
+      value,
+      needPauseTracking,
+      inVOnce,
+      needArraySpread: false,
+      loc: locStub
+    };
+  }
+  function createBlockStatement(body) {
+    return {
+      type: 21,
+      body,
+      loc: locStub
+    };
+  }
+  function getVNodeHelper(ssr, isComponent) {
+    return ssr || isComponent ? CREATE_VNODE : CREATE_ELEMENT_VNODE;
+  }
+  function getVNodeBlockHelper(ssr, isComponent) {
+    return ssr || isComponent ? CREATE_BLOCK : CREATE_ELEMENT_BLOCK;
+  }
+  function convertToBlock(node, { helper, removeHelper, inSSR }) {
+    if (!node.isBlock) {
+      node.isBlock = true;
+      removeHelper(getVNodeHelper(inSSR, node.isComponent));
+      helper(OPEN_BLOCK);
+      helper(getVNodeBlockHelper(inSSR, node.isComponent));
+    }
+  }
+
+  const defaultDelimitersOpen = new Uint8Array([123, 123]);
+  const defaultDelimitersClose = new Uint8Array([125, 125]);
+  function isTagStartChar(c) {
+    return c >= 97 && c <= 122 || c >= 65 && c <= 90;
+  }
+  function isWhitespace(c) {
+    return c === 32 || c === 10 || c === 9 || c === 12 || c === 13;
+  }
+  function isEndOfTagSection(c) {
+    return c === 47 || c === 62 || isWhitespace(c);
+  }
+  function toCharCodes(str) {
+    const ret = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) {
+      ret[i] = str.charCodeAt(i);
+    }
+    return ret;
+  }
+  const Sequences = {
+    Cdata: new Uint8Array([67, 68, 65, 84, 65, 91]),
+    // CDATA[
+    CdataEnd: new Uint8Array([93, 93, 62]),
+    // ]]>
+    CommentEnd: new Uint8Array([45, 45, 62]),
+    // `-->`
+    ScriptEnd: new Uint8Array([60, 47, 115, 99, 114, 105, 112, 116]),
+    // `<\/script`
+    StyleEnd: new Uint8Array([60, 47, 115, 116, 121, 108, 101]),
+    // `</style`
+    TitleEnd: new Uint8Array([60, 47, 116, 105, 116, 108, 101]),
+    // `</title`
+    TextareaEnd: new Uint8Array([
+      60,
+      47,
+      116,
+      101,
+      120,
+      116,
+      97,
+      114,
+      101,
+      97
+    ])
+    // `</textarea
+  };
+  class Tokenizer {
+    constructor(stack, cbs) {
+      this.stack = stack;
+      this.cbs = cbs;
+      /** The current state the tokenizer is in. */
+      this.state = 1;
+      /** The read buffer. */
+      this.buffer = "";
+      /** The beginning of the section that is currently being read. */
+      this.sectionStart = 0;
+      /** The index within the buffer that we are currently looking at. */
+      this.index = 0;
+      /** The start of the last entity. */
+      this.entityStart = 0;
+      /** Some behavior, eg. when decoding entities, is done while we are in another state. This keeps track of the other state type. */
+      this.baseState = 1;
+      /** For special parsing behavior inside of script and style tags. */
+      this.inRCDATA = false;
+      /** For disabling RCDATA tags handling */
+      this.inXML = false;
+      /** For disabling interpolation parsing in v-pre */
+      this.inVPre = false;
+      /** Record newline positions for fast line / column calculation */
+      this.newlines = [];
+      this.mode = 0;
+      this.delimiterOpen = defaultDelimitersOpen;
+      this.delimiterClose = defaultDelimitersClose;
+      this.delimiterIndex = -1;
+      this.currentSequence = void 0;
+      this.sequenceIndex = 0;
+    }
+    get inSFCRoot() {
+      return this.mode === 2 && this.stack.length === 0;
+    }
+    reset() {
+      this.state = 1;
+      this.mode = 0;
+      this.buffer = "";
+      this.sectionStart = 0;
+      this.index = 0;
+      this.baseState = 1;
+      this.inRCDATA = false;
+      this.currentSequence = void 0;
+      this.newlines.length = 0;
+      this.delimiterOpen = defaultDelimitersOpen;
+      this.delimiterClose = defaultDelimitersClose;
+    }
+    /**
+     * Generate Position object with line / column information using recorded
+     * newline positions. We know the index is always going to be an already
+     * processed index, so all the newlines up to this index should have been
+     * recorded.
+     */
+    getPos(index) {
+      let line = 1;
+      let column = index + 1;
+      const length = this.newlines.length;
+      let j = -1;
+      if (length > 100) {
+        let l = -1;
+        let r = length;
+        while (l + 1 < r) {
+          const m = l + r >>> 1;
+          this.newlines[m] < index ? l = m : r = m;
+        }
+        j = l;
+      } else {
+        for (let i = length - 1; i >= 0; i--) {
+          if (index > this.newlines[i]) {
+            j = i;
+            break;
+          }
+        }
+      }
+      if (j >= 0) {
+        line = j + 2;
+        column = index - this.newlines[j];
+      }
+      return {
+        column,
+        line,
+        offset: index
+      };
+    }
+    peek() {
+      return this.buffer.charCodeAt(this.index + 1);
+    }
+    stateText(c) {
+      if (c === 60) {
+        if (this.index > this.sectionStart) {
+          this.cbs.ontext(this.sectionStart, this.index);
+        }
+        this.state = 5;
+        this.sectionStart = this.index;
+      } else if (!this.inVPre && c === this.delimiterOpen[0]) {
+        this.state = 2;
+        this.delimiterIndex = 0;
+        this.stateInterpolationOpen(c);
+      }
+    }
+    stateInterpolationOpen(c) {
+      if (c === this.delimiterOpen[this.delimiterIndex]) {
+        if (this.delimiterIndex === this.delimiterOpen.length - 1) {
+          const start = this.index + 1 - this.delimiterOpen.length;
+          if (start > this.sectionStart) {
+            this.cbs.ontext(this.sectionStart, start);
+          }
+          this.state = 3;
+          this.sectionStart = start;
+        } else {
+          this.delimiterIndex++;
+        }
+      } else if (this.inRCDATA) {
+        this.state = 32;
+        this.stateInRCDATA(c);
+      } else {
+        this.state = 1;
+        this.stateText(c);
+      }
+    }
+    stateInterpolation(c) {
+      if (c === this.delimiterClose[0]) {
+        this.state = 4;
+        this.delimiterIndex = 0;
+        this.stateInterpolationClose(c);
+      }
+    }
+    stateInterpolationClose(c) {
+      if (c === this.delimiterClose[this.delimiterIndex]) {
+        if (this.delimiterIndex === this.delimiterClose.length - 1) {
+          this.cbs.oninterpolation(this.sectionStart, this.index + 1);
+          if (this.inRCDATA) {
+            this.state = 32;
+          } else {
+            this.state = 1;
+          }
+          this.sectionStart = this.index + 1;
+        } else {
+          this.delimiterIndex++;
+        }
+      } else {
+        this.state = 3;
+        this.stateInterpolation(c);
+      }
+    }
+    stateSpecialStartSequence(c) {
+      const isEnd = this.sequenceIndex === this.currentSequence.length;
+      const isMatch = isEnd ? (
+        // If we are at the end of the sequence, make sure the tag name has ended
+        isEndOfTagSection(c)
+      ) : (
+        // Otherwise, do a case-insensitive comparison
+        (c | 32) === this.currentSequence[this.sequenceIndex]
+      );
+      if (!isMatch) {
+        this.inRCDATA = false;
+      } else if (!isEnd) {
+        this.sequenceIndex++;
+        return;
+      }
+      this.sequenceIndex = 0;
+      this.state = 6;
+      this.stateInTagName(c);
+    }
+    /** Look for an end tag. For <title> and <textarea>, also decode entities. */
+    stateInRCDATA(c) {
+      if (this.sequenceIndex === this.currentSequence.length) {
+        if (c === 62 || isWhitespace(c)) {
+          const endOfText = this.index - this.currentSequence.length;
+          if (this.sectionStart < endOfText) {
+            const actualIndex = this.index;
+            this.index = endOfText;
+            this.cbs.ontext(this.sectionStart, endOfText);
+            this.index = actualIndex;
+          }
+          this.sectionStart = endOfText + 2;
+          this.stateInClosingTagName(c);
+          this.inRCDATA = false;
+          return;
+        }
+        this.sequenceIndex = 0;
+      }
+      if ((c | 32) === this.currentSequence[this.sequenceIndex]) {
+        this.sequenceIndex += 1;
+      } else if (this.sequenceIndex === 0) {
+        if (this.currentSequence === Sequences.TitleEnd || this.currentSequence === Sequences.TextareaEnd && !this.inSFCRoot) {
+          if (!this.inVPre && c === this.delimiterOpen[0]) {
+            this.state = 2;
+            this.delimiterIndex = 0;
+            this.stateInterpolationOpen(c);
+          }
+        } else if (this.fastForwardTo(60)) {
+          this.sequenceIndex = 1;
+        }
+      } else {
+        this.sequenceIndex = Number(c === 60);
+      }
+    }
+    stateCDATASequence(c) {
+      if (c === Sequences.Cdata[this.sequenceIndex]) {
+        if (++this.sequenceIndex === Sequences.Cdata.length) {
+          this.state = 28;
+          this.currentSequence = Sequences.CdataEnd;
+          this.sequenceIndex = 0;
+          this.sectionStart = this.index + 1;
+        }
+      } else {
+        this.sequenceIndex = 0;
+        this.state = 23;
+        this.stateInDeclaration(c);
+      }
+    }
+    /**
+     * When we wait for one specific character, we can speed things up
+     * by skipping through the buffer until we find it.
+     *
+     * @returns Whether the character was found.
+     */
+    fastForwardTo(c) {
+      while (++this.index < this.buffer.length) {
+        const cc = this.buffer.charCodeAt(this.index);
+        if (cc === 10) {
+          this.newlines.push(this.index);
+        }
+        if (cc === c) {
+          return true;
+        }
+      }
+      this.index = this.buffer.length - 1;
+      return false;
+    }
+    /**
+     * Comments and CDATA end with `-->` and `]]>`.
+     *
+     * Their common qualities are:
+     * - Their end sequences have a distinct character they start with.
+     * - That character is then repeated, so we have to check multiple repeats.
+     * - All characters but the start character of the sequence can be skipped.
+     */
+    stateInCommentLike(c) {
+      if (c === this.currentSequence[this.sequenceIndex]) {
+        if (++this.sequenceIndex === this.currentSequence.length) {
+          if (this.currentSequence === Sequences.CdataEnd) {
+            this.cbs.oncdata(this.sectionStart, this.index - 2);
+          } else {
+            this.cbs.oncomment(this.sectionStart, this.index - 2);
+          }
+          this.sequenceIndex = 0;
+          this.sectionStart = this.index + 1;
+          this.state = 1;
+        }
+      } else if (this.sequenceIndex === 0) {
+        if (this.fastForwardTo(this.currentSequence[0])) {
+          this.sequenceIndex = 1;
+        }
+      } else if (c !== this.currentSequence[this.sequenceIndex - 1]) {
+        this.sequenceIndex = 0;
+      }
+    }
+    startSpecial(sequence, offset) {
+      this.enterRCDATA(sequence, offset);
+      this.state = 31;
+    }
+    enterRCDATA(sequence, offset) {
+      this.inRCDATA = true;
+      this.currentSequence = sequence;
+      this.sequenceIndex = offset;
+    }
+    stateBeforeTagName(c) {
+      if (c === 33) {
+        this.state = 22;
+        this.sectionStart = this.index + 1;
+      } else if (c === 63) {
+        this.state = 24;
+        this.sectionStart = this.index + 1;
+      } else if (isTagStartChar(c)) {
+        this.sectionStart = this.index;
+        if (this.mode === 0) {
+          this.state = 6;
+        } else if (this.inSFCRoot) {
+          this.state = 34;
+        } else if (!this.inXML) {
+          if (c === 116) {
+            this.state = 30;
+          } else {
+            this.state = c === 115 ? 29 : 6;
+          }
+        } else {
+          this.state = 6;
+        }
+      } else if (c === 47) {
+        this.state = 8;
+      } else {
+        this.state = 1;
+        this.stateText(c);
+      }
+    }
+    stateInTagName(c) {
+      if (isEndOfTagSection(c)) {
+        this.handleTagName(c);
+      }
+    }
+    stateInSFCRootTagName(c) {
+      if (isEndOfTagSection(c)) {
+        const tag = this.buffer.slice(this.sectionStart, this.index);
+        if (tag !== "template") {
+          this.enterRCDATA(toCharCodes(`</` + tag), 0);
+        }
+        this.handleTagName(c);
+      }
+    }
+    handleTagName(c) {
+      this.cbs.onopentagname(this.sectionStart, this.index);
+      this.sectionStart = -1;
+      this.state = 11;
+      this.stateBeforeAttrName(c);
+    }
+    stateBeforeClosingTagName(c) {
+      if (isWhitespace(c)) ; else if (c === 62) {
+        {
+          this.cbs.onerr(14, this.index);
+        }
+        this.state = 1;
+        this.sectionStart = this.index + 1;
+      } else {
+        this.state = isTagStartChar(c) ? 9 : 27;
+        this.sectionStart = this.index;
+      }
+    }
+    stateInClosingTagName(c) {
+      if (c === 62 || isWhitespace(c)) {
+        this.cbs.onclosetag(this.sectionStart, this.index);
+        this.sectionStart = -1;
+        this.state = 10;
+        this.stateAfterClosingTagName(c);
+      }
+    }
+    stateAfterClosingTagName(c) {
+      if (c === 62) {
+        this.state = 1;
+        this.sectionStart = this.index + 1;
+      }
+    }
+    stateBeforeAttrName(c) {
+      if (c === 62) {
+        this.cbs.onopentagend(this.index);
+        if (this.inRCDATA) {
+          this.state = 32;
+        } else {
+          this.state = 1;
+        }
+        this.sectionStart = this.index + 1;
+      } else if (c === 47) {
+        this.state = 7;
+        if (this.peek() !== 62) {
+          this.cbs.onerr(22, this.index);
+        }
+      } else if (c === 60 && this.peek() === 47) {
+        this.cbs.onopentagend(this.index);
+        this.state = 5;
+        this.sectionStart = this.index;
+      } else if (!isWhitespace(c)) {
+        if (c === 61) {
+          this.cbs.onerr(
+            19,
+            this.index
+          );
+        }
+        this.handleAttrStart(c);
+      }
+    }
+    handleAttrStart(c) {
+      if (c === 118 && this.peek() === 45) {
+        this.state = 13;
+        this.sectionStart = this.index;
+      } else if (c === 46 || c === 58 || c === 64 || c === 35) {
+        this.cbs.ondirname(this.index, this.index + 1);
+        this.state = 14;
+        this.sectionStart = this.index + 1;
+      } else {
+        this.state = 12;
+        this.sectionStart = this.index;
+      }
+    }
+    stateInSelfClosingTag(c) {
+      if (c === 62) {
+        this.cbs.onselfclosingtag(this.index);
+        this.state = 1;
+        this.sectionStart = this.index + 1;
+        this.inRCDATA = false;
+      } else if (!isWhitespace(c)) {
+        this.state = 11;
+        this.stateBeforeAttrName(c);
+      }
+    }
+    stateInAttrName(c) {
+      if (c === 61 || isEndOfTagSection(c)) {
+        this.cbs.onattribname(this.sectionStart, this.index);
+        this.handleAttrNameEnd(c);
+      } else if (c === 34 || c === 39 || c === 60) {
+        this.cbs.onerr(
+          17,
+          this.index
+        );
+      }
+    }
+    stateInDirName(c) {
+      if (c === 61 || isEndOfTagSection(c)) {
+        this.cbs.ondirname(this.sectionStart, this.index);
+        this.handleAttrNameEnd(c);
+      } else if (c === 58) {
+        this.cbs.ondirname(this.sectionStart, this.index);
+        this.state = 14;
+        this.sectionStart = this.index + 1;
+      } else if (c === 46) {
+        this.cbs.ondirname(this.sectionStart, this.index);
+        this.state = 16;
+        this.sectionStart = this.index + 1;
+      }
+    }
+    stateInDirArg(c) {
+      if (c === 61 || isEndOfTagSection(c)) {
+        this.cbs.ondirarg(this.sectionStart, this.index);
+        this.handleAttrNameEnd(c);
+      } else if (c === 91) {
+        this.state = 15;
+      } else if (c === 46) {
+        this.cbs.ondirarg(this.sectionStart, this.index);
+        this.state = 16;
+        this.sectionStart = this.index + 1;
+      }
+    }
+    stateInDynamicDirArg(c) {
+      if (c === 93) {
+        this.state = 14;
+      } else if (c === 61 || isEndOfTagSection(c)) {
+        this.cbs.ondirarg(this.sectionStart, this.index + 1);
+        this.handleAttrNameEnd(c);
+        {
+          this.cbs.onerr(
+            27,
+            this.index
+          );
+        }
+      }
+    }
+    stateInDirModifier(c) {
+      if (c === 61 || isEndOfTagSection(c)) {
+        this.cbs.ondirmodifier(this.sectionStart, this.index);
+        this.handleAttrNameEnd(c);
+      } else if (c === 46) {
+        this.cbs.ondirmodifier(this.sectionStart, this.index);
+        this.sectionStart = this.index + 1;
+      }
+    }
+    handleAttrNameEnd(c) {
+      this.sectionStart = this.index;
+      this.state = 17;
+      this.cbs.onattribnameend(this.index);
+      this.stateAfterAttrName(c);
+    }
+    stateAfterAttrName(c) {
+      if (c === 61) {
+        this.state = 18;
+      } else if (c === 47 || c === 62) {
+        this.cbs.onattribend(0, this.sectionStart);
+        this.sectionStart = -1;
+        this.state = 11;
+        this.stateBeforeAttrName(c);
+      } else if (!isWhitespace(c)) {
+        this.cbs.onattribend(0, this.sectionStart);
+        this.handleAttrStart(c);
+      }
+    }
+    stateBeforeAttrValue(c) {
+      if (c === 34) {
+        this.state = 19;
+        this.sectionStart = this.index + 1;
+      } else if (c === 39) {
+        this.state = 20;
+        this.sectionStart = this.index + 1;
+      } else if (!isWhitespace(c)) {
+        this.sectionStart = this.index;
+        this.state = 21;
+        this.stateInAttrValueNoQuotes(c);
+      }
+    }
+    handleInAttrValue(c, quote) {
+      if (c === quote || this.fastForwardTo(quote)) {
+        this.cbs.onattribdata(this.sectionStart, this.index);
+        this.sectionStart = -1;
+        this.cbs.onattribend(
+          quote === 34 ? 3 : 2,
+          this.index + 1
+        );
+        this.state = 11;
+      }
+    }
+    stateInAttrValueDoubleQuotes(c) {
+      this.handleInAttrValue(c, 34);
+    }
+    stateInAttrValueSingleQuotes(c) {
+      this.handleInAttrValue(c, 39);
+    }
+    stateInAttrValueNoQuotes(c) {
+      if (isWhitespace(c) || c === 62) {
+        this.cbs.onattribdata(this.sectionStart, this.index);
+        this.sectionStart = -1;
+        this.cbs.onattribend(1, this.index);
+        this.state = 11;
+        this.stateBeforeAttrName(c);
+      } else if (c === 34 || c === 39 || c === 60 || c === 61 || c === 96) {
+        this.cbs.onerr(
+          18,
+          this.index
+        );
+      } else ;
+    }
+    stateBeforeDeclaration(c) {
+      if (c === 91) {
+        this.state = 26;
+        this.sequenceIndex = 0;
+      } else {
+        this.state = c === 45 ? 25 : 23;
+      }
+    }
+    stateInDeclaration(c) {
+      if (c === 62 || this.fastForwardTo(62)) {
+        this.state = 1;
+        this.sectionStart = this.index + 1;
+      }
+    }
+    stateInProcessingInstruction(c) {
+      if (c === 62 || this.fastForwardTo(62)) {
+        this.cbs.onprocessinginstruction(this.sectionStart, this.index);
+        this.state = 1;
+        this.sectionStart = this.index + 1;
+      }
+    }
+    stateBeforeComment(c) {
+      if (c === 45) {
+        this.state = 28;
+        this.currentSequence = Sequences.CommentEnd;
+        this.sequenceIndex = 2;
+        this.sectionStart = this.index + 1;
+      } else {
+        this.state = 23;
+      }
+    }
+    stateInSpecialComment(c) {
+      if (c === 62 || this.fastForwardTo(62)) {
+        this.cbs.oncomment(this.sectionStart, this.index);
+        this.state = 1;
+        this.sectionStart = this.index + 1;
+      }
+    }
+    stateBeforeSpecialS(c) {
+      if (c === Sequences.ScriptEnd[3]) {
+        this.startSpecial(Sequences.ScriptEnd, 4);
+      } else if (c === Sequences.StyleEnd[3]) {
+        this.startSpecial(Sequences.StyleEnd, 4);
+      } else {
+        this.state = 6;
+        this.stateInTagName(c);
+      }
+    }
+    stateBeforeSpecialT(c) {
+      if (c === Sequences.TitleEnd[3]) {
+        this.startSpecial(Sequences.TitleEnd, 4);
+      } else if (c === Sequences.TextareaEnd[3]) {
+        this.startSpecial(Sequences.TextareaEnd, 4);
+      } else {
+        this.state = 6;
+        this.stateInTagName(c);
+      }
+    }
+    startEntity() {
+    }
+    stateInEntity() {
+    }
+    /**
+     * Iterates through the buffer, calling the function corresponding to the current state.
+     *
+     * States that are more likely to be hit are higher up, as a performance improvement.
+     */
+    parse(input) {
+      this.buffer = input;
+      while (this.index < this.buffer.length) {
+        const c = this.buffer.charCodeAt(this.index);
+        if (c === 10 && this.state !== 33) {
+          this.newlines.push(this.index);
+        }
+        switch (this.state) {
+          case 1: {
+            this.stateText(c);
+            break;
+          }
+          case 2: {
+            this.stateInterpolationOpen(c);
+            break;
+          }
+          case 3: {
+            this.stateInterpolation(c);
+            break;
+          }
+          case 4: {
+            this.stateInterpolationClose(c);
+            break;
+          }
+          case 31: {
+            this.stateSpecialStartSequence(c);
+            break;
+          }
+          case 32: {
+            this.stateInRCDATA(c);
+            break;
+          }
+          case 26: {
+            this.stateCDATASequence(c);
+            break;
+          }
+          case 19: {
+            this.stateInAttrValueDoubleQuotes(c);
+            break;
+          }
+          case 12: {
+            this.stateInAttrName(c);
+            break;
+          }
+          case 13: {
+            this.stateInDirName(c);
+            break;
+          }
+          case 14: {
+            this.stateInDirArg(c);
+            break;
+          }
+          case 15: {
+            this.stateInDynamicDirArg(c);
+            break;
+          }
+          case 16: {
+            this.stateInDirModifier(c);
+            break;
+          }
+          case 28: {
+            this.stateInCommentLike(c);
+            break;
+          }
+          case 27: {
+            this.stateInSpecialComment(c);
+            break;
+          }
+          case 11: {
+            this.stateBeforeAttrName(c);
+            break;
+          }
+          case 6: {
+            this.stateInTagName(c);
+            break;
+          }
+          case 34: {
+            this.stateInSFCRootTagName(c);
+            break;
+          }
+          case 9: {
+            this.stateInClosingTagName(c);
+            break;
+          }
+          case 5: {
+            this.stateBeforeTagName(c);
+            break;
+          }
+          case 17: {
+            this.stateAfterAttrName(c);
+            break;
+          }
+          case 20: {
+            this.stateInAttrValueSingleQuotes(c);
+            break;
+          }
+          case 18: {
+            this.stateBeforeAttrValue(c);
+            break;
+          }
+          case 8: {
+            this.stateBeforeClosingTagName(c);
+            break;
+          }
+          case 10: {
+            this.stateAfterClosingTagName(c);
+            break;
+          }
+          case 29: {
+            this.stateBeforeSpecialS(c);
+            break;
+          }
+          case 30: {
+            this.stateBeforeSpecialT(c);
+            break;
+          }
+          case 21: {
+            this.stateInAttrValueNoQuotes(c);
+            break;
+          }
+          case 7: {
+            this.stateInSelfClosingTag(c);
+            break;
+          }
+          case 23: {
+            this.stateInDeclaration(c);
+            break;
+          }
+          case 22: {
+            this.stateBeforeDeclaration(c);
+            break;
+          }
+          case 25: {
+            this.stateBeforeComment(c);
+            break;
+          }
+          case 24: {
+            this.stateInProcessingInstruction(c);
+            break;
+          }
+          case 33: {
+            this.stateInEntity();
+            break;
+          }
+        }
+        this.index++;
+      }
+      this.cleanup();
+      this.finish();
+    }
+    /**
+     * Remove data that has already been consumed from the buffer.
+     */
+    cleanup() {
+      if (this.sectionStart !== this.index) {
+        if (this.state === 1 || this.state === 32 && this.sequenceIndex === 0) {
+          this.cbs.ontext(this.sectionStart, this.index);
+          this.sectionStart = this.index;
+        } else if (this.state === 19 || this.state === 20 || this.state === 21) {
+          this.cbs.onattribdata(this.sectionStart, this.index);
+          this.sectionStart = this.index;
+        }
+      }
+    }
+    finish() {
+      this.handleTrailingData();
+      this.cbs.onend();
+    }
+    /** Handle any trailing data. */
+    handleTrailingData() {
+      const endIndex = this.buffer.length;
+      if (this.sectionStart >= endIndex) {
+        return;
+      }
+      if (this.state === 28) {
+        if (this.currentSequence === Sequences.CdataEnd) {
+          this.cbs.oncdata(this.sectionStart, endIndex);
+        } else {
+          this.cbs.oncomment(this.sectionStart, endIndex);
+        }
+      } else if (this.state === 6 || this.state === 11 || this.state === 18 || this.state === 17 || this.state === 12 || this.state === 13 || this.state === 14 || this.state === 15 || this.state === 16 || this.state === 20 || this.state === 19 || this.state === 21 || this.state === 9) ; else {
+        this.cbs.ontext(this.sectionStart, endIndex);
+      }
+    }
+    emitCodePoint(cp, consumed) {
+    }
+  }
+
+  function defaultOnError(error) {
+    throw error;
+  }
+  function defaultOnWarn(msg) {
+    console.warn(`[Vue warn] ${msg.message}`);
+  }
+  function createCompilerError(code, loc, messages, additionalMessage) {
+    const msg = (messages || errorMessages)[code] + (additionalMessage || ``) ;
+    const error = new SyntaxError(String(msg));
+    error.code = code;
+    error.loc = loc;
+    return error;
+  }
+  const errorMessages = {
+    // parse errors
+    [0]: "Illegal comment.",
+    [1]: "CDATA section is allowed only in XML context.",
+    [2]: "Duplicate attribute.",
+    [3]: "End tag cannot have attributes.",
+    [4]: "Illegal '/' in tags.",
+    [5]: "Unexpected EOF in tag.",
+    [6]: "Unexpected EOF in CDATA section.",
+    [7]: "Unexpected EOF in comment.",
+    [8]: "Unexpected EOF in script.",
+    [9]: "Unexpected EOF in tag.",
+    [10]: "Incorrectly closed comment.",
+    [11]: "Incorrectly opened comment.",
+    [12]: "Illegal tag name. Use '&lt;' to print '<'.",
+    [13]: "Attribute value was expected.",
+    [14]: "End tag name was expected.",
+    [15]: "Whitespace was expected.",
+    [16]: "Unexpected '<!--' in comment.",
+    [17]: `Attribute name cannot contain U+0022 ("), U+0027 ('), and U+003C (<).`,
+    [18]: "Unquoted attribute value cannot contain U+0022 (\"), U+0027 ('), U+003C (<), U+003D (=), and U+0060 (`).",
+    [19]: "Attribute name cannot start with '='.",
+    [21]: "'<?' is allowed only in XML context.",
+    [20]: `Unexpected null character.`,
+    [22]: "Illegal '/' in tags.",
+    // Vue-specific parse errors
+    [23]: "Invalid end tag.",
+    [24]: "Element is missing end tag.",
+    [25]: "Interpolation end sign was not found.",
+    [27]: "End bracket for dynamic directive argument was not found. Note that dynamic directive argument cannot contain spaces.",
+    [26]: "Legal directive name was expected.",
+    // transform errors
+    [28]: `v-if/v-else-if is missing expression.`,
+    [29]: `v-if/else branches must use unique keys.`,
+    [30]: `v-else/v-else-if has no adjacent v-if or v-else-if.`,
+    [31]: `v-for is missing expression.`,
+    [32]: `v-for has invalid expression.`,
+    [33]: `<template v-for> key should be placed on the <template> tag.`,
+    [34]: `v-bind is missing expression.`,
+    [53]: `v-bind with same-name shorthand only allows static argument.`,
+    [35]: `v-on is missing expression.`,
+    [36]: `Unexpected custom directive on <slot> outlet.`,
+    [37]: `Mixed v-slot usage on both the component and nested <template>. When there are multiple named slots, all slots should use <template> syntax to avoid scope ambiguity.`,
+    [38]: `Duplicate slot names found. `,
+    [39]: `Extraneous children found when component already has explicitly named default slot. These children will be ignored.`,
+    [40]: `v-slot can only be used on components or <template> tags.`,
+    [41]: `v-model is missing expression.`,
+    [42]: `v-model value must be a valid JavaScript member expression.`,
+    [43]: `v-model cannot be used on v-for or v-slot scope variables because they are not writable.`,
+    [44]: `v-model cannot be used on a prop, because local prop bindings are not writable.
+Use a v-bind binding combined with a v-on listener that emits update:x event instead.`,
+    [45]: `v-model cannot be used on a const binding because it is not writable.`,
+    [46]: `Error parsing JavaScript expression: `,
+    [47]: `<KeepAlive> expects exactly one child component.`,
+    [52]: `@vnode-* hooks in templates are no longer supported. Use the vue: prefix instead. For example, @vnode-mounted should be changed to @vue:mounted. @vnode-* hooks support has been removed in 3.4.`,
+    // generic errors
+    [48]: `"prefixIdentifiers" option is not supported in this build of compiler.`,
+    [49]: `ES module mode is not supported in this build of compiler.`,
+    [50]: `"cacheHandlers" option is only supported when the "prefixIdentifiers" option is enabled.`,
+    [51]: `"scopeId" option is only supported in module mode.`,
+    // just to fulfill types
+    [54]: ``
+  };
+
+  const isStaticExp = (p) => p.type === 4 && p.isStatic;
+  function isCoreComponent(tag) {
+    switch (tag) {
+      case "Teleport":
+      case "teleport":
+        return TELEPORT;
+      case "Suspense":
+      case "suspense":
+        return SUSPENSE;
+      case "KeepAlive":
+      case "keep-alive":
+        return KEEP_ALIVE;
+      case "BaseTransition":
+      case "base-transition":
+        return BASE_TRANSITION;
+    }
+  }
+  const nonIdentifierRE = /^$|^\d|[^\$\w\xA0-\uFFFF]/;
+  const isSimpleIdentifier = (name) => !nonIdentifierRE.test(name);
+  const validFirstIdentCharRE = /[A-Za-z_$\xA0-\uFFFF]/;
+  const validIdentCharRE = /[\.\?\w$\xA0-\uFFFF]/;
+  const whitespaceRE = /\s+[.[]\s*|\s*[.[]\s+/g;
+  const getExpSource = (exp) => exp.type === 4 ? exp.content : exp.loc.source;
+  const isMemberExpressionBrowser = (exp) => {
+    const path = getExpSource(exp).trim().replace(whitespaceRE, (s) => s.trim());
+    let state = 0 /* inMemberExp */;
+    let stateStack = [];
+    let currentOpenBracketCount = 0;
+    let currentOpenParensCount = 0;
+    let currentStringType = null;
+    for (let i = 0; i < path.length; i++) {
+      const char = path.charAt(i);
+      switch (state) {
+        case 0 /* inMemberExp */:
+          if (char === "[") {
+            stateStack.push(state);
+            state = 1 /* inBrackets */;
+            currentOpenBracketCount++;
+          } else if (char === "(") {
+            stateStack.push(state);
+            state = 2 /* inParens */;
+            currentOpenParensCount++;
+          } else if (!(i === 0 ? validFirstIdentCharRE : validIdentCharRE).test(char)) {
+            return false;
+          }
+          break;
+        case 1 /* inBrackets */:
+          if (char === `'` || char === `"` || char === "`") {
+            stateStack.push(state);
+            state = 3 /* inString */;
+            currentStringType = char;
+          } else if (char === `[`) {
+            currentOpenBracketCount++;
+          } else if (char === `]`) {
+            if (!--currentOpenBracketCount) {
+              state = stateStack.pop();
+            }
+          }
+          break;
+        case 2 /* inParens */:
+          if (char === `'` || char === `"` || char === "`") {
+            stateStack.push(state);
+            state = 3 /* inString */;
+            currentStringType = char;
+          } else if (char === `(`) {
+            currentOpenParensCount++;
+          } else if (char === `)`) {
+            if (i === path.length - 1) {
+              return false;
+            }
+            if (!--currentOpenParensCount) {
+              state = stateStack.pop();
+            }
+          }
+          break;
+        case 3 /* inString */:
+          if (char === currentStringType) {
+            state = stateStack.pop();
+            currentStringType = null;
+          }
+          break;
+      }
+    }
+    return !currentOpenBracketCount && !currentOpenParensCount;
+  };
+  const isMemberExpression = isMemberExpressionBrowser ;
+  const fnExpRE = /^\s*(?:async\s*)?(?:\([^)]*?\)|[\w$_]+)\s*(?::[^=]+)?=>|^\s*(?:async\s+)?function(?:\s+[\w$]+)?\s*\(/;
+  const isFnExpressionBrowser = (exp) => fnExpRE.test(getExpSource(exp));
+  const isFnExpression = isFnExpressionBrowser ;
+  function assert(condition, msg) {
+    if (!condition) {
+      throw new Error(msg || `unexpected compiler condition`);
+    }
+  }
+  function findDir(node, name, allowEmpty = false) {
+    for (let i = 0; i < node.props.length; i++) {
+      const p = node.props[i];
+      if (p.type === 7 && (allowEmpty || p.exp) && (isString(name) ? p.name === name : name.test(p.name))) {
+        return p;
+      }
+    }
+  }
+  function findProp(node, name, dynamicOnly = false, allowEmpty = false) {
+    for (let i = 0; i < node.props.length; i++) {
+      const p = node.props[i];
+      if (p.type === 6) {
+        if (dynamicOnly) continue;
+        if (p.name === name && (p.value || allowEmpty)) {
+          return p;
+        }
+      } else if (p.name === "bind" && (p.exp || allowEmpty) && isStaticArgOf(p.arg, name)) {
+        return p;
+      }
+    }
+  }
+  function isStaticArgOf(arg, name) {
+    return !!(arg && isStaticExp(arg) && arg.content === name);
+  }
+  function hasDynamicKeyVBind(node) {
+    return node.props.some(
+      (p) => p.type === 7 && p.name === "bind" && (!p.arg || // v-bind="obj"
+      p.arg.type !== 4 || // v-bind:[_ctx.foo]
+      !p.arg.isStatic)
+      // v-bind:[foo]
+    );
+  }
+  function isText$1(node) {
+    return node.type === 5 || node.type === 2;
+  }
+  function isVPre(p) {
+    return p.type === 7 && p.name === "pre";
+  }
+  function isVSlot(p) {
+    return p.type === 7 && p.name === "slot";
+  }
+  function isTemplateNode(node) {
+    return node.type === 1 && node.tagType === 3;
+  }
+  function isSlotOutlet(node) {
+    return node.type === 1 && node.tagType === 2;
+  }
+  const propsHelperSet = /* @__PURE__ */ new Set([NORMALIZE_PROPS, GUARD_REACTIVE_PROPS]);
+  function getUnnormalizedProps(props, callPath = []) {
+    if (props && !isString(props) && props.type === 14) {
+      const callee = props.callee;
+      if (!isString(callee) && propsHelperSet.has(callee)) {
+        return getUnnormalizedProps(
+          props.arguments[0],
+          callPath.concat(props)
+        );
+      }
+    }
+    return [props, callPath];
+  }
+  function injectProp(node, prop, context) {
+    let propsWithInjection;
+    let props = node.type === 13 ? node.props : node.arguments[2];
+    let callPath = [];
+    let parentCall;
+    if (props && !isString(props) && props.type === 14) {
+      const ret = getUnnormalizedProps(props);
+      props = ret[0];
+      callPath = ret[1];
+      parentCall = callPath[callPath.length - 1];
+    }
+    if (props == null || isString(props)) {
+      propsWithInjection = createObjectExpression([prop]);
+    } else if (props.type === 14) {
+      const first = props.arguments[0];
+      if (!isString(first) && first.type === 15) {
+        if (!hasProp(prop, first)) {
+          first.properties.unshift(prop);
+        }
+      } else {
+        if (props.callee === TO_HANDLERS) {
+          propsWithInjection = createCallExpression(context.helper(MERGE_PROPS), [
+            createObjectExpression([prop]),
+            props
+          ]);
+        } else {
+          props.arguments.unshift(createObjectExpression([prop]));
+        }
+      }
+      !propsWithInjection && (propsWithInjection = props);
+    } else if (props.type === 15) {
+      if (!hasProp(prop, props)) {
+        props.properties.unshift(prop);
+      }
+      propsWithInjection = props;
+    } else {
+      propsWithInjection = createCallExpression(context.helper(MERGE_PROPS), [
+        createObjectExpression([prop]),
+        props
+      ]);
+      if (parentCall && parentCall.callee === GUARD_REACTIVE_PROPS) {
+        parentCall = callPath[callPath.length - 2];
+      }
+    }
+    if (node.type === 13) {
+      if (parentCall) {
+        parentCall.arguments[0] = propsWithInjection;
+      } else {
+        node.props = propsWithInjection;
+      }
+    } else {
+      if (parentCall) {
+        parentCall.arguments[0] = propsWithInjection;
+      } else {
+        node.arguments[2] = propsWithInjection;
+      }
+    }
+  }
+  function hasProp(prop, props) {
+    let result = false;
+    if (prop.key.type === 4) {
+      const propKeyName = prop.key.content;
+      result = props.properties.some(
+        (p) => p.key.type === 4 && p.key.content === propKeyName
+      );
+    }
+    return result;
+  }
+  function toValidAssetId(name, type) {
+    return `_${type}_${name.replace(/[^\w]/g, (searchValue, replaceValue) => {
+    return searchValue === "-" ? "_" : name.charCodeAt(replaceValue).toString();
+  })}`;
+  }
+  function getMemoedVNodeCall(node) {
+    if (node.type === 14 && node.callee === WITH_MEMO) {
+      return node.arguments[1].returns;
+    } else {
+      return node;
+    }
+  }
+  const forAliasRE = /([\s\S]*?)\s+(?:in|of)\s+(\S[\s\S]*)/;
+  function isAllWhitespace(str) {
+    for (let i = 0; i < str.length; i++) {
+      if (!isWhitespace(str.charCodeAt(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function isWhitespaceText(node) {
+    return node.type === 2 && isAllWhitespace(node.content) || node.type === 12 && isWhitespaceText(node.content);
+  }
+  function isCommentOrWhitespace(node) {
+    return node.type === 3 || isWhitespaceText(node);
+  }
+
+  const defaultParserOptions = {
+    parseMode: "base",
+    ns: 0,
+    delimiters: [`{{`, `}}`],
+    getNamespace: () => 0,
+    isVoidTag: NO,
+    isPreTag: NO,
+    isIgnoreNewlineTag: NO,
+    isCustomElement: NO,
+    onError: defaultOnError,
+    onWarn: defaultOnWarn,
+    comments: true,
+    prefixIdentifiers: false
+  };
+  let currentOptions = defaultParserOptions;
+  let currentRoot = null;
+  let currentInput = "";
+  let currentOpenTag = null;
+  let currentProp = null;
+  let currentAttrValue = "";
+  let currentAttrStartIndex = -1;
+  let currentAttrEndIndex = -1;
+  let inPre = 0;
+  let inVPre = false;
+  let currentVPreBoundary = null;
+  const stack = [];
+  const tokenizer = new Tokenizer(stack, {
+    onerr: emitError,
+    ontext(start, end) {
+      onText(getSlice(start, end), start, end);
+    },
+    ontextentity(char, start, end) {
+      onText(char, start, end);
+    },
+    oninterpolation(start, end) {
+      if (inVPre) {
+        return onText(getSlice(start, end), start, end);
+      }
+      let innerStart = start + tokenizer.delimiterOpen.length;
+      let innerEnd = end - tokenizer.delimiterClose.length;
+      while (isWhitespace(currentInput.charCodeAt(innerStart))) {
+        innerStart++;
+      }
+      while (isWhitespace(currentInput.charCodeAt(innerEnd - 1))) {
+        innerEnd--;
+      }
+      let exp = getSlice(innerStart, innerEnd);
+      if (exp.includes("&")) {
+        {
+          exp = currentOptions.decodeEntities(exp, false);
+        }
+      }
+      addNode({
+        type: 5,
+        content: createExp(exp, false, getLoc(innerStart, innerEnd)),
+        loc: getLoc(start, end)
+      });
+    },
+    onopentagname(start, end) {
+      const name = getSlice(start, end);
+      currentOpenTag = {
+        type: 1,
+        tag: name,
+        ns: currentOptions.getNamespace(name, stack[0], currentOptions.ns),
+        tagType: 0,
+        // will be refined on tag close
+        props: [],
+        children: [],
+        loc: getLoc(start - 1, end),
+        codegenNode: void 0
+      };
+    },
+    onopentagend(end) {
+      endOpenTag(end);
+    },
+    onclosetag(start, end) {
+      const name = getSlice(start, end);
+      if (!currentOptions.isVoidTag(name)) {
+        let found = false;
+        for (let i = 0; i < stack.length; i++) {
+          const e = stack[i];
+          if (e.tag.toLowerCase() === name.toLowerCase()) {
+            found = true;
+            if (i > 0) {
+              emitError(24, stack[0].loc.start.offset);
+            }
+            for (let j = 0; j <= i; j++) {
+              const el = stack.shift();
+              onCloseTag(el, end, j < i);
+            }
+            break;
+          }
+        }
+        if (!found) {
+          emitError(23, backTrack(start, 60));
+        }
+      }
+    },
+    onselfclosingtag(end) {
+      const name = currentOpenTag.tag;
+      currentOpenTag.isSelfClosing = true;
+      endOpenTag(end);
+      if (stack[0] && stack[0].tag === name) {
+        onCloseTag(stack.shift(), end);
+      }
+    },
+    onattribname(start, end) {
+      currentProp = {
+        type: 6,
+        name: getSlice(start, end),
+        nameLoc: getLoc(start, end),
+        value: void 0,
+        loc: getLoc(start)
+      };
+    },
+    ondirname(start, end) {
+      const raw = getSlice(start, end);
+      const name = raw === "." || raw === ":" ? "bind" : raw === "@" ? "on" : raw === "#" ? "slot" : raw.slice(2);
+      if (!inVPre && name === "") {
+        emitError(26, start);
+      }
+      if (inVPre || name === "") {
+        currentProp = {
+          type: 6,
+          name: raw,
+          nameLoc: getLoc(start, end),
+          value: void 0,
+          loc: getLoc(start)
+        };
+      } else {
+        currentProp = {
+          type: 7,
+          name,
+          rawName: raw,
+          exp: void 0,
+          arg: void 0,
+          modifiers: raw === "." ? [createSimpleExpression("prop")] : [],
+          loc: getLoc(start)
+        };
+        if (name === "pre") {
+          inVPre = tokenizer.inVPre = true;
+          currentVPreBoundary = currentOpenTag;
+          const props = currentOpenTag.props;
+          for (let i = 0; i < props.length; i++) {
+            if (props[i].type === 7) {
+              props[i] = dirToAttr(props[i]);
+            }
+          }
+        }
+      }
+    },
+    ondirarg(start, end) {
+      if (start === end) return;
+      const arg = getSlice(start, end);
+      if (inVPre && !isVPre(currentProp)) {
+        currentProp.name += arg;
+        setLocEnd(currentProp.nameLoc, end);
+      } else {
+        const isStatic = arg[0] !== `[`;
+        currentProp.arg = createExp(
+          isStatic ? arg : arg.slice(1, -1),
+          isStatic,
+          getLoc(start, end),
+          isStatic ? 3 : 0
+        );
+      }
+    },
+    ondirmodifier(start, end) {
+      const mod = getSlice(start, end);
+      if (inVPre && !isVPre(currentProp)) {
+        currentProp.name += "." + mod;
+        setLocEnd(currentProp.nameLoc, end);
+      } else if (currentProp.name === "slot") {
+        const arg = currentProp.arg;
+        if (arg) {
+          arg.content += "." + mod;
+          setLocEnd(arg.loc, end);
+        }
+      } else {
+        const exp = createSimpleExpression(mod, true, getLoc(start, end));
+        currentProp.modifiers.push(exp);
+      }
+    },
+    onattribdata(start, end) {
+      currentAttrValue += getSlice(start, end);
+      if (currentAttrStartIndex < 0) currentAttrStartIndex = start;
+      currentAttrEndIndex = end;
+    },
+    onattribentity(char, start, end) {
+      currentAttrValue += char;
+      if (currentAttrStartIndex < 0) currentAttrStartIndex = start;
+      currentAttrEndIndex = end;
+    },
+    onattribnameend(end) {
+      const start = currentProp.loc.start.offset;
+      const name = getSlice(start, end);
+      if (currentProp.type === 7) {
+        currentProp.rawName = name;
+      }
+      if (currentOpenTag.props.some(
+        (p) => (p.type === 7 ? p.rawName : p.name) === name
+      )) {
+        emitError(2, start);
+      }
+    },
+    onattribend(quote, end) {
+      if (currentOpenTag && currentProp) {
+        setLocEnd(currentProp.loc, end);
+        if (quote !== 0) {
+          if (currentAttrValue.includes("&")) {
+            currentAttrValue = currentOptions.decodeEntities(
+              currentAttrValue,
+              true
+            );
+          }
+          if (currentProp.type === 6) {
+            if (currentProp.name === "class") {
+              currentAttrValue = condense(currentAttrValue).trim();
+            }
+            if (quote === 1 && !currentAttrValue) {
+              emitError(13, end);
+            }
+            currentProp.value = {
+              type: 2,
+              content: currentAttrValue,
+              loc: quote === 1 ? getLoc(currentAttrStartIndex, currentAttrEndIndex) : getLoc(currentAttrStartIndex - 1, currentAttrEndIndex + 1)
+            };
+            if (tokenizer.inSFCRoot && currentOpenTag.tag === "template" && currentProp.name === "lang" && currentAttrValue && currentAttrValue !== "html") {
+              tokenizer.enterRCDATA(toCharCodes(`</template`), 0);
+            }
+          } else {
+            let expParseMode = 0 /* Normal */;
+            currentProp.exp = createExp(
+              currentAttrValue,
+              false,
+              getLoc(currentAttrStartIndex, currentAttrEndIndex),
+              0,
+              expParseMode
+            );
+            if (currentProp.name === "for") {
+              currentProp.forParseResult = parseForExpression(currentProp.exp);
+            }
+          }
+        }
+        if (currentProp.type !== 7 || currentProp.name !== "pre") {
+          currentOpenTag.props.push(currentProp);
+        }
+      }
+      currentAttrValue = "";
+      currentAttrStartIndex = currentAttrEndIndex = -1;
+    },
+    oncomment(start, end) {
+      if (currentOptions.comments) {
+        addNode({
+          type: 3,
+          content: getSlice(start, end),
+          loc: getLoc(start - 4, end + 3)
+        });
+      }
+    },
+    onend() {
+      const end = currentInput.length;
+      if (tokenizer.state !== 1) {
+        switch (tokenizer.state) {
+          case 5:
+          case 8:
+            emitError(5, end);
+            break;
+          case 3:
+          case 4:
+            emitError(
+              25,
+              tokenizer.sectionStart
+            );
+            break;
+          case 28:
+            if (tokenizer.currentSequence === Sequences.CdataEnd) {
+              emitError(6, end);
+            } else {
+              emitError(7, end);
+            }
+            break;
+          case 6:
+          case 7:
+          case 9:
+          case 11:
+          case 12:
+          case 13:
+          case 14:
+          case 15:
+          case 16:
+          case 17:
+          case 18:
+          case 19:
+          // "
+          case 20:
+          // '
+          case 21:
+            emitError(9, end);
+            break;
+        }
+      }
+      for (let index = 0; index < stack.length; index++) {
+        onCloseTag(stack[index], end - 1);
+        emitError(24, stack[index].loc.start.offset);
+      }
+    },
+    oncdata(start, end) {
+      if (stack[0].ns !== 0) {
+        onText(getSlice(start, end), start, end);
+      } else {
+        emitError(1, start - 9);
+      }
+    },
+    onprocessinginstruction(start) {
+      if ((stack[0] ? stack[0].ns : currentOptions.ns) === 0) {
+        emitError(
+          21,
+          start - 1
+        );
+      }
+    }
+  });
+  const forIteratorRE = /,([^,\}\]]*)(?:,([^,\}\]]*))?$/;
+  const stripParensRE = /^\(|\)$/g;
+  function parseForExpression(input) {
+    const loc = input.loc;
+    const exp = input.content;
+    const inMatch = exp.match(forAliasRE);
+    if (!inMatch) return;
+    const [, LHS, RHS] = inMatch;
+    const createAliasExpression = (content, offset, asParam = false) => {
+      const start = loc.start.offset + offset;
+      const end = start + content.length;
+      return createExp(
+        content,
+        false,
+        getLoc(start, end),
+        0,
+        asParam ? 1 /* Params */ : 0 /* Normal */
+      );
+    };
+    const result = {
+      source: createAliasExpression(RHS.trim(), exp.indexOf(RHS, LHS.length)),
+      value: void 0,
+      key: void 0,
+      index: void 0,
+      finalized: false
+    };
+    let valueContent = LHS.trim().replace(stripParensRE, "").trim();
+    const trimmedOffset = LHS.indexOf(valueContent);
+    const iteratorMatch = valueContent.match(forIteratorRE);
+    if (iteratorMatch) {
+      valueContent = valueContent.replace(forIteratorRE, "").trim();
+      const keyContent = iteratorMatch[1].trim();
+      let keyOffset;
+      if (keyContent) {
+        keyOffset = exp.indexOf(keyContent, trimmedOffset + valueContent.length);
+        result.key = createAliasExpression(keyContent, keyOffset, true);
+      }
+      if (iteratorMatch[2]) {
+        const indexContent = iteratorMatch[2].trim();
+        if (indexContent) {
+          result.index = createAliasExpression(
+            indexContent,
+            exp.indexOf(
+              indexContent,
+              result.key ? keyOffset + keyContent.length : trimmedOffset + valueContent.length
+            ),
+            true
+          );
+        }
+      }
+    }
+    if (valueContent) {
+      result.value = createAliasExpression(valueContent, trimmedOffset, true);
+    }
+    return result;
+  }
+  function getSlice(start, end) {
+    return currentInput.slice(start, end);
+  }
+  function endOpenTag(end) {
+    if (tokenizer.inSFCRoot) {
+      currentOpenTag.innerLoc = getLoc(end + 1, end + 1);
+    }
+    addNode(currentOpenTag);
+    const { tag, ns } = currentOpenTag;
+    if (ns === 0 && currentOptions.isPreTag(tag)) {
+      inPre++;
+    }
+    if (currentOptions.isVoidTag(tag)) {
+      onCloseTag(currentOpenTag, end);
+    } else {
+      stack.unshift(currentOpenTag);
+      if (ns === 1 || ns === 2) {
+        tokenizer.inXML = true;
+      }
+    }
+    currentOpenTag = null;
+  }
+  function onText(content, start, end) {
+    {
+      const tag = stack[0] && stack[0].tag;
+      if (tag !== "script" && tag !== "style" && content.includes("&")) {
+        content = currentOptions.decodeEntities(content, false);
+      }
+    }
+    const parent = stack[0] || currentRoot;
+    const lastNode = parent.children[parent.children.length - 1];
+    if (lastNode && lastNode.type === 2) {
+      lastNode.content += content;
+      setLocEnd(lastNode.loc, end);
+    } else {
+      parent.children.push({
+        type: 2,
+        content,
+        loc: getLoc(start, end)
+      });
+    }
+  }
+  function onCloseTag(el, end, isImplied = false) {
+    if (isImplied) {
+      setLocEnd(el.loc, backTrack(end, 60));
+    } else {
+      setLocEnd(el.loc, lookAhead(end, 62) + 1);
+    }
+    if (tokenizer.inSFCRoot) {
+      if (el.children.length) {
+        el.innerLoc.end = extend({}, el.children[el.children.length - 1].loc.end);
+      } else {
+        el.innerLoc.end = extend({}, el.innerLoc.start);
+      }
+      el.innerLoc.source = getSlice(
+        el.innerLoc.start.offset,
+        el.innerLoc.end.offset
+      );
+    }
+    const { tag, ns, children } = el;
+    if (!inVPre) {
+      if (tag === "slot") {
+        el.tagType = 2;
+      } else if (isFragmentTemplate(el)) {
+        el.tagType = 3;
+      } else if (isComponent(el)) {
+        el.tagType = 1;
+      }
+    }
+    if (!tokenizer.inRCDATA) {
+      el.children = condenseWhitespace(children);
+    }
+    if (ns === 0 && currentOptions.isIgnoreNewlineTag(tag)) {
+      const first = children[0];
+      if (first && first.type === 2) {
+        first.content = first.content.replace(/^\r?\n/, "");
+      }
+    }
+    if (ns === 0 && currentOptions.isPreTag(tag)) {
+      inPre--;
+    }
+    if (currentVPreBoundary === el) {
+      inVPre = tokenizer.inVPre = false;
+      currentVPreBoundary = null;
+    }
+    if (tokenizer.inXML && (stack[0] ? stack[0].ns : currentOptions.ns) === 0) {
+      tokenizer.inXML = false;
+    }
+  }
+  function lookAhead(index, c) {
+    let i = index;
+    while (currentInput.charCodeAt(i) !== c && i < currentInput.length - 1) i++;
+    return i;
+  }
+  function backTrack(index, c) {
+    let i = index;
+    while (currentInput.charCodeAt(i) !== c && i >= 0) i--;
+    return i;
+  }
+  const specialTemplateDir = /* @__PURE__ */ new Set(["if", "else", "else-if", "for", "slot"]);
+  function isFragmentTemplate({ tag, props }) {
+    if (tag === "template") {
+      for (let i = 0; i < props.length; i++) {
+        if (props[i].type === 7 && specialTemplateDir.has(props[i].name)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+  function isComponent({ tag, props }) {
+    if (currentOptions.isCustomElement(tag)) {
+      return false;
+    }
+    if (tag === "component" || isUpperCase(tag.charCodeAt(0)) || isCoreComponent(tag) || currentOptions.isBuiltInComponent && currentOptions.isBuiltInComponent(tag) || currentOptions.isNativeTag && !currentOptions.isNativeTag(tag)) {
+      return true;
+    }
+    for (let i = 0; i < props.length; i++) {
+      const p = props[i];
+      if (p.type === 6) {
+        if (p.name === "is" && p.value) {
+          if (p.value.content.startsWith("vue:")) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+  function isUpperCase(c) {
+    return c > 64 && c < 91;
+  }
+  const windowsNewlineRE = /\r\n/g;
+  function condenseWhitespace(nodes) {
+    const shouldCondense = currentOptions.whitespace !== "preserve";
+    let removedWhitespace = false;
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (node.type === 2) {
+        if (!inPre) {
+          if (isAllWhitespace(node.content)) {
+            const prev = nodes[i - 1] && nodes[i - 1].type;
+            const next = nodes[i + 1] && nodes[i + 1].type;
+            if (!prev || !next || shouldCondense && (prev === 3 && (next === 3 || next === 1) || prev === 1 && (next === 3 || next === 1 && hasNewlineChar(node.content)))) {
+              removedWhitespace = true;
+              nodes[i] = null;
+            } else {
+              node.content = " ";
+            }
+          } else if (shouldCondense) {
+            node.content = condense(node.content);
+          }
+        } else {
+          node.content = node.content.replace(windowsNewlineRE, "\n");
+        }
+      }
+    }
+    return removedWhitespace ? nodes.filter(Boolean) : nodes;
+  }
+  function hasNewlineChar(str) {
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i);
+      if (c === 10 || c === 13) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function condense(str) {
+    let ret = "";
+    let prevCharIsWhitespace = false;
+    for (let i = 0; i < str.length; i++) {
+      if (isWhitespace(str.charCodeAt(i))) {
+        if (!prevCharIsWhitespace) {
+          ret += " ";
+          prevCharIsWhitespace = true;
+        }
+      } else {
+        ret += str[i];
+        prevCharIsWhitespace = false;
+      }
+    }
+    return ret;
+  }
+  function addNode(node) {
+    (stack[0] || currentRoot).children.push(node);
+  }
+  function getLoc(start, end) {
+    return {
+      start: tokenizer.getPos(start),
+      // @ts-expect-error allow late attachment
+      end: end == null ? end : tokenizer.getPos(end),
+      // @ts-expect-error allow late attachment
+      source: end == null ? end : getSlice(start, end)
+    };
+  }
+  function cloneLoc(loc) {
+    return getLoc(loc.start.offset, loc.end.offset);
+  }
+  function setLocEnd(loc, end) {
+    loc.end = tokenizer.getPos(end);
+    loc.source = getSlice(loc.start.offset, end);
+  }
+  function dirToAttr(dir) {
+    const attr = {
+      type: 6,
+      name: dir.rawName,
+      nameLoc: getLoc(
+        dir.loc.start.offset,
+        dir.loc.start.offset + dir.rawName.length
+      ),
+      value: void 0,
+      loc: dir.loc
+    };
+    if (dir.exp) {
+      const loc = dir.exp.loc;
+      if (loc.end.offset < dir.loc.end.offset) {
+        loc.start.offset--;
+        loc.start.column--;
+        loc.end.offset++;
+        loc.end.column++;
+      }
+      attr.value = {
+        type: 2,
+        content: dir.exp.content,
+        loc
+      };
+    }
+    return attr;
+  }
+  function createExp(content, isStatic = false, loc, constType = 0, parseMode = 0 /* Normal */) {
+    const exp = createSimpleExpression(content, isStatic, loc, constType);
+    return exp;
+  }
+  function emitError(code, index, message) {
+    currentOptions.onError(
+      createCompilerError(code, getLoc(index, index), void 0, message)
+    );
+  }
+  function reset() {
+    tokenizer.reset();
+    currentOpenTag = null;
+    currentProp = null;
+    currentAttrValue = "";
+    currentAttrStartIndex = -1;
+    currentAttrEndIndex = -1;
+    stack.length = 0;
+  }
+  function baseParse(input, options) {
+    reset();
+    currentInput = input;
+    currentOptions = extend({}, defaultParserOptions);
+    if (options) {
+      let key;
+      for (key in options) {
+        if (options[key] != null) {
+          currentOptions[key] = options[key];
+        }
+      }
+    }
+    {
+      if (!currentOptions.decodeEntities) {
+        throw new Error(
+          `[@vue/compiler-core] decodeEntities option is required in browser builds.`
+        );
+      }
+    }
+    tokenizer.mode = currentOptions.parseMode === "html" ? 1 : currentOptions.parseMode === "sfc" ? 2 : 0;
+    tokenizer.inXML = currentOptions.ns === 1 || currentOptions.ns === 2;
+    const delimiters = options && options.delimiters;
+    if (delimiters) {
+      tokenizer.delimiterOpen = toCharCodes(delimiters[0]);
+      tokenizer.delimiterClose = toCharCodes(delimiters[1]);
+    }
+    const root = currentRoot = createRoot([], input);
+    tokenizer.parse(currentInput);
+    root.loc = getLoc(0, input.length);
+    root.children = condenseWhitespace(root.children);
+    currentRoot = null;
+    return root;
+  }
+
+  function cacheStatic(root, context) {
+    walk(
+      root,
+      void 0,
+      context,
+      // Root node is unfortunately non-hoistable due to potential parent
+      // fallthrough attributes.
+      !!getSingleElementRoot(root)
+    );
+  }
+  function getSingleElementRoot(root) {
+    const children = root.children.filter((x) => x.type !== 3);
+    return children.length === 1 && children[0].type === 1 && !isSlotOutlet(children[0]) ? children[0] : null;
+  }
+  function walk(node, parent, context, doNotHoistNode = false, inFor = false) {
+    const { children } = node;
+    const toCache = [];
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      if (child.type === 1 && child.tagType === 0) {
+        const constantType = doNotHoistNode ? 0 : getConstantType(child, context);
+        if (constantType > 0) {
+          if (constantType >= 2) {
+            child.codegenNode.patchFlag = -1;
+            toCache.push(child);
+            continue;
+          }
+        } else {
+          const codegenNode = child.codegenNode;
+          if (codegenNode.type === 13) {
+            const flag = codegenNode.patchFlag;
+            if ((flag === void 0 || flag === 512 || flag === 1) && getGeneratedPropsConstantType(child, context) >= 2) {
+              const props = getNodeProps(child);
+              if (props) {
+                codegenNode.props = context.hoist(props);
+              }
+            }
+            if (codegenNode.dynamicProps) {
+              codegenNode.dynamicProps = context.hoist(codegenNode.dynamicProps);
+            }
+          }
+        }
+      } else if (child.type === 12) {
+        const constantType = doNotHoistNode ? 0 : getConstantType(child, context);
+        if (constantType >= 2) {
+          if (child.codegenNode.type === 14 && child.codegenNode.arguments.length > 0) {
+            child.codegenNode.arguments.push(
+              -1 + (` /* ${PatchFlagNames[-1]} */` )
+            );
+          }
+          toCache.push(child);
+          continue;
+        }
+      }
+      if (child.type === 1) {
+        const isComponent = child.tagType === 1;
+        if (isComponent) {
+          context.scopes.vSlot++;
+        }
+        walk(child, node, context, false, inFor);
+        if (isComponent) {
+          context.scopes.vSlot--;
+        }
+      } else if (child.type === 11) {
+        walk(child, node, context, child.children.length === 1, true);
+      } else if (child.type === 9) {
+        for (let i2 = 0; i2 < child.branches.length; i2++) {
+          walk(
+            child.branches[i2],
+            node,
+            context,
+            child.branches[i2].children.length === 1,
+            inFor
+          );
+        }
+      }
+    }
+    let cachedAsArray = false;
+    if (toCache.length === children.length && node.type === 1) {
+      if (node.tagType === 0 && node.codegenNode && node.codegenNode.type === 13 && isArray(node.codegenNode.children)) {
+        node.codegenNode.children = getCacheExpression(
+          createArrayExpression(node.codegenNode.children)
+        );
+        cachedAsArray = true;
+      } else if (node.tagType === 1 && node.codegenNode && node.codegenNode.type === 13 && node.codegenNode.children && !isArray(node.codegenNode.children) && node.codegenNode.children.type === 15) {
+        const slot = getSlotNode(node.codegenNode, "default");
+        if (slot) {
+          slot.returns = getCacheExpression(
+            createArrayExpression(slot.returns)
+          );
+          cachedAsArray = true;
+        }
+      } else if (node.tagType === 3 && parent && parent.type === 1 && parent.tagType === 1 && parent.codegenNode && parent.codegenNode.type === 13 && parent.codegenNode.children && !isArray(parent.codegenNode.children) && parent.codegenNode.children.type === 15) {
+        const slotName = findDir(node, "slot", true);
+        const slot = slotName && slotName.arg && getSlotNode(parent.codegenNode, slotName.arg);
+        if (slot) {
+          slot.returns = getCacheExpression(
+            createArrayExpression(slot.returns)
+          );
+          cachedAsArray = true;
+        }
+      }
+    }
+    if (!cachedAsArray) {
+      for (const child of toCache) {
+        child.codegenNode = context.cache(child.codegenNode);
+      }
+    }
+    function getCacheExpression(value) {
+      const exp = context.cache(value);
+      exp.needArraySpread = true;
+      return exp;
+    }
+    function getSlotNode(node2, name) {
+      if (node2.children && !isArray(node2.children) && node2.children.type === 15) {
+        const slot = node2.children.properties.find(
+          (p) => p.key === name || p.key.content === name
+        );
+        return slot && slot.value;
+      }
+    }
+    if (toCache.length && context.transformHoist) {
+      context.transformHoist(children, context, node);
+    }
+  }
+  function getConstantType(node, context) {
+    const { constantCache } = context;
+    switch (node.type) {
+      case 1:
+        if (node.tagType !== 0) {
+          return 0;
+        }
+        const cached = constantCache.get(node);
+        if (cached !== void 0) {
+          return cached;
+        }
+        const codegenNode = node.codegenNode;
+        if (codegenNode.type !== 13) {
+          return 0;
+        }
+        if (codegenNode.isBlock && node.tag !== "svg" && node.tag !== "foreignObject" && node.tag !== "math") {
+          return 0;
+        }
+        if (codegenNode.patchFlag === void 0) {
+          let returnType2 = 3;
+          const generatedPropsType = getGeneratedPropsConstantType(node, context);
+          if (generatedPropsType === 0) {
+            constantCache.set(node, 0);
+            return 0;
+          }
+          if (generatedPropsType < returnType2) {
+            returnType2 = generatedPropsType;
+          }
+          for (let i = 0; i < node.children.length; i++) {
+            const childType = getConstantType(node.children[i], context);
+            if (childType === 0) {
+              constantCache.set(node, 0);
+              return 0;
+            }
+            if (childType < returnType2) {
+              returnType2 = childType;
+            }
+          }
+          if (returnType2 > 1) {
+            for (let i = 0; i < node.props.length; i++) {
+              const p = node.props[i];
+              if (p.type === 7 && p.name === "bind" && p.exp) {
+                const expType = getConstantType(p.exp, context);
+                if (expType === 0) {
+                  constantCache.set(node, 0);
+                  return 0;
+                }
+                if (expType < returnType2) {
+                  returnType2 = expType;
+                }
+              }
+            }
+          }
+          if (codegenNode.isBlock) {
+            for (let i = 0; i < node.props.length; i++) {
+              const p = node.props[i];
+              if (p.type === 7) {
+                constantCache.set(node, 0);
+                return 0;
+              }
+            }
+            context.removeHelper(OPEN_BLOCK);
+            context.removeHelper(
+              getVNodeBlockHelper(context.inSSR, codegenNode.isComponent)
+            );
+            codegenNode.isBlock = false;
+            context.helper(getVNodeHelper(context.inSSR, codegenNode.isComponent));
+          }
+          constantCache.set(node, returnType2);
+          return returnType2;
+        } else {
+          constantCache.set(node, 0);
+          return 0;
+        }
+      case 2:
+      case 3:
+        return 3;
+      case 9:
+      case 11:
+      case 10:
+        return 0;
+      case 5:
+      case 12:
+        return getConstantType(node.content, context);
+      case 4:
+        return node.constType;
+      case 8:
+        let returnType = 3;
+        for (let i = 0; i < node.children.length; i++) {
+          const child = node.children[i];
+          if (isString(child) || isSymbol(child)) {
+            continue;
+          }
+          const childType = getConstantType(child, context);
+          if (childType === 0) {
+            return 0;
+          } else if (childType < returnType) {
+            returnType = childType;
+          }
+        }
+        return returnType;
+      case 20:
+        return 2;
+      default:
+        return 0;
+    }
+  }
+  const allowHoistedHelperSet = /* @__PURE__ */ new Set([
+    NORMALIZE_CLASS,
+    NORMALIZE_STYLE,
+    NORMALIZE_PROPS,
+    GUARD_REACTIVE_PROPS
+  ]);
+  function getConstantTypeOfHelperCall(value, context) {
+    if (value.type === 14 && !isString(value.callee) && allowHoistedHelperSet.has(value.callee)) {
+      const arg = value.arguments[0];
+      if (arg.type === 4) {
+        return getConstantType(arg, context);
+      } else if (arg.type === 14) {
+        return getConstantTypeOfHelperCall(arg, context);
+      }
+    }
+    return 0;
+  }
+  function getGeneratedPropsConstantType(node, context) {
+    let returnType = 3;
+    const props = getNodeProps(node);
+    if (props && props.type === 15) {
+      const { properties } = props;
+      for (let i = 0; i < properties.length; i++) {
+        const { key, value } = properties[i];
+        const keyType = getConstantType(key, context);
+        if (keyType === 0) {
+          return keyType;
+        }
+        if (keyType < returnType) {
+          returnType = keyType;
+        }
+        let valueType;
+        if (value.type === 4) {
+          valueType = getConstantType(value, context);
+        } else if (value.type === 14) {
+          valueType = getConstantTypeOfHelperCall(value, context);
+        } else {
+          valueType = 0;
+        }
+        if (valueType === 0) {
+          return valueType;
+        }
+        if (valueType < returnType) {
+          returnType = valueType;
+        }
+      }
+    }
+    return returnType;
+  }
+  function getNodeProps(node) {
+    const codegenNode = node.codegenNode;
+    if (codegenNode.type === 13) {
+      return codegenNode.props;
+    }
+  }
+
+  function createTransformContext(root, {
+    filename = "",
+    prefixIdentifiers = false,
+    hoistStatic = false,
+    hmr = false,
+    cacheHandlers = false,
+    nodeTransforms = [],
+    directiveTransforms = {},
+    transformHoist = null,
+    isBuiltInComponent = NOOP,
+    isCustomElement = NOOP,
+    expressionPlugins = [],
+    scopeId = null,
+    slotted = true,
+    ssr = false,
+    inSSR = false,
+    ssrCssVars = ``,
+    bindingMetadata = EMPTY_OBJ,
+    inline = false,
+    isTS = false,
+    onError = defaultOnError,
+    onWarn = defaultOnWarn,
+    compatConfig
+  }) {
+    const nameMatch = filename.replace(/\?.*$/, "").match(/([^/\\]+)\.\w+$/);
+    const context = {
+      // options
+      filename,
+      selfName: nameMatch && capitalize(camelize(nameMatch[1])),
+      prefixIdentifiers,
+      hoistStatic,
+      hmr,
+      cacheHandlers,
+      nodeTransforms,
+      directiveTransforms,
+      transformHoist,
+      isBuiltInComponent,
+      isCustomElement,
+      expressionPlugins,
+      scopeId,
+      slotted,
+      ssr,
+      inSSR,
+      ssrCssVars,
+      bindingMetadata,
+      inline,
+      isTS,
+      onError,
+      onWarn,
+      compatConfig,
+      // state
+      root,
+      helpers: /* @__PURE__ */ new Map(),
+      components: /* @__PURE__ */ new Set(),
+      directives: /* @__PURE__ */ new Set(),
+      hoists: [],
+      imports: [],
+      cached: [],
+      constantCache: /* @__PURE__ */ new WeakMap(),
+      temps: 0,
+      identifiers: /* @__PURE__ */ Object.create(null),
+      scopes: {
+        vFor: 0,
+        vSlot: 0,
+        vPre: 0,
+        vOnce: 0
+      },
+      parent: null,
+      grandParent: null,
+      currentNode: root,
+      childIndex: 0,
+      inVOnce: false,
+      // methods
+      helper(name) {
+        const count = context.helpers.get(name) || 0;
+        context.helpers.set(name, count + 1);
+        return name;
+      },
+      removeHelper(name) {
+        const count = context.helpers.get(name);
+        if (count) {
+          const currentCount = count - 1;
+          if (!currentCount) {
+            context.helpers.delete(name);
+          } else {
+            context.helpers.set(name, currentCount);
+          }
+        }
+      },
+      helperString(name) {
+        return `_${helperNameMap[context.helper(name)]}`;
+      },
+      replaceNode(node) {
+        {
+          if (!context.currentNode) {
+            throw new Error(`Node being replaced is already removed.`);
+          }
+          if (!context.parent) {
+            throw new Error(`Cannot replace root node.`);
+          }
+        }
+        context.parent.children[context.childIndex] = context.currentNode = node;
+      },
+      removeNode(node) {
+        if (!context.parent) {
+          throw new Error(`Cannot remove root node.`);
+        }
+        const list = context.parent.children;
+        const removalIndex = node ? list.indexOf(node) : context.currentNode ? context.childIndex : -1;
+        if (removalIndex < 0) {
+          throw new Error(`node being removed is not a child of current parent`);
+        }
+        if (!node || node === context.currentNode) {
+          context.currentNode = null;
+          context.onNodeRemoved();
+        } else {
+          if (context.childIndex > removalIndex) {
+            context.childIndex--;
+            context.onNodeRemoved();
+          }
+        }
+        context.parent.children.splice(removalIndex, 1);
+      },
+      onNodeRemoved: NOOP,
+      addIdentifiers(exp) {
+      },
+      removeIdentifiers(exp) {
+      },
+      hoist(exp) {
+        if (isString(exp)) exp = createSimpleExpression(exp);
+        context.hoists.push(exp);
+        const identifier = createSimpleExpression(
+          `_hoisted_${context.hoists.length}`,
+          false,
+          exp.loc,
+          2
+        );
+        identifier.hoisted = exp;
+        return identifier;
+      },
+      cache(exp, isVNode = false, inVOnce = false) {
+        const cacheExp = createCacheExpression(
+          context.cached.length,
+          exp,
+          isVNode,
+          inVOnce
+        );
+        context.cached.push(cacheExp);
+        return cacheExp;
+      }
+    };
+    return context;
+  }
+  function transform(root, options) {
+    const context = createTransformContext(root, options);
+    traverseNode(root, context);
+    if (options.hoistStatic) {
+      cacheStatic(root, context);
+    }
+    if (!options.ssr) {
+      createRootCodegen(root, context);
+    }
+    root.helpers = /* @__PURE__ */ new Set([...context.helpers.keys()]);
+    root.components = [...context.components];
+    root.directives = [...context.directives];
+    root.imports = context.imports;
+    root.hoists = context.hoists;
+    root.temps = context.temps;
+    root.cached = context.cached;
+    root.transformed = true;
+  }
+  function createRootCodegen(root, context) {
+    const { helper } = context;
+    const { children } = root;
+    if (children.length === 1) {
+      const singleElementRootChild = getSingleElementRoot(root);
+      if (singleElementRootChild && singleElementRootChild.codegenNode) {
+        const codegenNode = singleElementRootChild.codegenNode;
+        if (codegenNode.type === 13) {
+          convertToBlock(codegenNode, context);
+        }
+        root.codegenNode = codegenNode;
+      } else {
+        root.codegenNode = children[0];
+      }
+    } else if (children.length > 1) {
+      let patchFlag = 64;
+      if (children.filter((c) => c.type !== 3).length === 1) {
+        patchFlag |= 2048;
+      }
+      root.codegenNode = createVNodeCall(
+        context,
+        helper(FRAGMENT),
+        void 0,
+        root.children,
+        patchFlag,
+        void 0,
+        void 0,
+        true,
+        void 0,
+        false
+      );
+    } else ;
+  }
+  function traverseChildren(parent, context) {
+    let i = 0;
+    const nodeRemoved = () => {
+      i--;
+    };
+    for (; i < parent.children.length; i++) {
+      const child = parent.children[i];
+      if (isString(child)) continue;
+      context.grandParent = context.parent;
+      context.parent = parent;
+      context.childIndex = i;
+      context.onNodeRemoved = nodeRemoved;
+      traverseNode(child, context);
+    }
+  }
+  function traverseNode(node, context) {
+    context.currentNode = node;
+    const { nodeTransforms } = context;
+    const exitFns = [];
+    for (let i2 = 0; i2 < nodeTransforms.length; i2++) {
+      const onExit = nodeTransforms[i2](node, context);
+      if (onExit) {
+        if (isArray(onExit)) {
+          exitFns.push(...onExit);
+        } else {
+          exitFns.push(onExit);
+        }
+      }
+      if (!context.currentNode) {
+        return;
+      } else {
+        node = context.currentNode;
+      }
+    }
+    switch (node.type) {
+      case 3:
+        if (!context.ssr) {
+          context.helper(CREATE_COMMENT);
+        }
+        break;
+      case 5:
+        if (!context.ssr) {
+          context.helper(TO_DISPLAY_STRING);
+        }
+        break;
+      // for container types, further traverse downwards
+      case 9:
+        for (let i2 = 0; i2 < node.branches.length; i2++) {
+          traverseNode(node.branches[i2], context);
+        }
+        break;
+      case 10:
+      case 11:
+      case 1:
+      case 0:
+        traverseChildren(node, context);
+        break;
+    }
+    context.currentNode = node;
+    let i = exitFns.length;
+    while (i--) {
+      exitFns[i]();
+    }
+  }
+  function createStructuralDirectiveTransform(name, fn) {
+    const matches = isString(name) ? (n) => n === name : (n) => name.test(n);
+    return (node, context) => {
+      if (node.type === 1) {
+        const { props } = node;
+        if (node.tagType === 3 && props.some(isVSlot)) {
+          return;
+        }
+        const exitFns = [];
+        for (let i = 0; i < props.length; i++) {
+          const prop = props[i];
+          if (prop.type === 7 && matches(prop.name)) {
+            props.splice(i, 1);
+            i--;
+            const onExit = fn(node, prop, context);
+            if (onExit) exitFns.push(onExit);
+          }
+        }
+        return exitFns;
+      }
+    };
+  }
+
+  const PURE_ANNOTATION = `/*@__PURE__*/`;
+  const aliasHelper = (s) => `${helperNameMap[s]}: _${helperNameMap[s]}`;
+  function createCodegenContext(ast, {
+    mode = "function",
+    prefixIdentifiers = mode === "module",
+    sourceMap = false,
+    filename = `template.vue.html`,
+    scopeId = null,
+    optimizeImports = false,
+    runtimeGlobalName = `Vue`,
+    runtimeModuleName = `vue`,
+    ssrRuntimeModuleName = "vue/server-renderer",
+    ssr = false,
+    isTS = false,
+    inSSR = false
+  }) {
+    const context = {
+      mode,
+      prefixIdentifiers,
+      sourceMap,
+      filename,
+      scopeId,
+      optimizeImports,
+      runtimeGlobalName,
+      runtimeModuleName,
+      ssrRuntimeModuleName,
+      ssr,
+      isTS,
+      inSSR,
+      source: ast.source,
+      code: ``,
+      column: 1,
+      line: 1,
+      offset: 0,
+      indentLevel: 0,
+      pure: false,
+      map: void 0,
+      helper(key) {
+        return `_${helperNameMap[key]}`;
+      },
+      push(code, newlineIndex = -2 /* None */, node) {
+        context.code += code;
+      },
+      indent() {
+        newline(++context.indentLevel);
+      },
+      deindent(withoutNewLine = false) {
+        if (withoutNewLine) {
+          --context.indentLevel;
+        } else {
+          newline(--context.indentLevel);
+        }
+      },
+      newline() {
+        newline(context.indentLevel);
+      }
+    };
+    function newline(n) {
+      context.push("\n" + `  `.repeat(n), 0 /* Start */);
+    }
+    return context;
+  }
+  function generate(ast, options = {}) {
+    const context = createCodegenContext(ast, options);
+    if (options.onContextCreated) options.onContextCreated(context);
+    const {
+      mode,
+      push,
+      prefixIdentifiers,
+      indent,
+      deindent,
+      newline,
+      scopeId,
+      ssr
+    } = context;
+    const helpers = Array.from(ast.helpers);
+    const hasHelpers = helpers.length > 0;
+    const useWithBlock = !prefixIdentifiers && mode !== "module";
+    const preambleContext = context;
+    {
+      genFunctionPreamble(ast, preambleContext);
+    }
+    const functionName = ssr ? `ssrRender` : `render`;
+    const args = ssr ? ["_ctx", "_push", "_parent", "_attrs"] : ["_ctx", "_cache"];
+    const signature = args.join(", ");
+    {
+      push(`function ${functionName}(${signature}) {`);
+    }
+    indent();
+    if (useWithBlock) {
+      push(`with (_ctx) {`);
+      indent();
+      if (hasHelpers) {
+        push(
+          `const { ${helpers.map(aliasHelper).join(", ")} } = _Vue
+`,
+          -1 /* End */
+        );
+        newline();
+      }
+    }
+    if (ast.components.length) {
+      genAssets(ast.components, "component", context);
+      if (ast.directives.length || ast.temps > 0) {
+        newline();
+      }
+    }
+    if (ast.directives.length) {
+      genAssets(ast.directives, "directive", context);
+      if (ast.temps > 0) {
+        newline();
+      }
+    }
+    if (ast.temps > 0) {
+      push(`let `);
+      for (let i = 0; i < ast.temps; i++) {
+        push(`${i > 0 ? `, ` : ``}_temp${i}`);
+      }
+    }
+    if (ast.components.length || ast.directives.length || ast.temps) {
+      push(`
+`, 0 /* Start */);
+      newline();
+    }
+    if (!ssr) {
+      push(`return `);
+    }
+    if (ast.codegenNode) {
+      genNode(ast.codegenNode, context);
+    } else {
+      push(`null`);
+    }
+    if (useWithBlock) {
+      deindent();
+      push(`}`);
+    }
+    deindent();
+    push(`}`);
+    return {
+      ast,
+      code: context.code,
+      preamble: ``,
+      map: context.map ? context.map.toJSON() : void 0
+    };
+  }
+  function genFunctionPreamble(ast, context) {
+    const {
+      ssr,
+      prefixIdentifiers,
+      push,
+      newline,
+      runtimeModuleName,
+      runtimeGlobalName,
+      ssrRuntimeModuleName
+    } = context;
+    const VueBinding = runtimeGlobalName;
+    const helpers = Array.from(ast.helpers);
+    if (helpers.length > 0) {
+      {
+        push(`const _Vue = ${VueBinding}
+`, -1 /* End */);
+        if (ast.hoists.length) {
+          const staticHelpers = [
+            CREATE_VNODE,
+            CREATE_ELEMENT_VNODE,
+            CREATE_COMMENT,
+            CREATE_TEXT,
+            CREATE_STATIC
+          ].filter((helper) => helpers.includes(helper)).map(aliasHelper).join(", ");
+          push(`const { ${staticHelpers} } = _Vue
+`, -1 /* End */);
+        }
+      }
+    }
+    genHoists(ast.hoists, context);
+    newline();
+    push(`return `);
+  }
+  function genAssets(assets, type, { helper, push, newline, isTS }) {
+    const resolver = helper(
+      type === "component" ? RESOLVE_COMPONENT : RESOLVE_DIRECTIVE
+    );
+    for (let i = 0; i < assets.length; i++) {
+      let id = assets[i];
+      const maybeSelfReference = id.endsWith("__self");
+      if (maybeSelfReference) {
+        id = id.slice(0, -6);
+      }
+      push(
+        `const ${toValidAssetId(id, type)} = ${resolver}(${JSON.stringify(id)}${maybeSelfReference ? `, true` : ``})${isTS ? `!` : ``}`
+      );
+      if (i < assets.length - 1) {
+        newline();
+      }
+    }
+  }
+  function genHoists(hoists, context) {
+    if (!hoists.length) {
+      return;
+    }
+    context.pure = true;
+    const { push, newline } = context;
+    newline();
+    for (let i = 0; i < hoists.length; i++) {
+      const exp = hoists[i];
+      if (exp) {
+        push(`const _hoisted_${i + 1} = `);
+        genNode(exp, context);
+        newline();
+      }
+    }
+    context.pure = false;
+  }
+  function isText(n) {
+    return isString(n) || n.type === 4 || n.type === 2 || n.type === 5 || n.type === 8;
+  }
+  function genNodeListAsArray(nodes, context) {
+    const multilines = nodes.length > 3 || nodes.some((n) => isArray(n) || !isText(n));
+    context.push(`[`);
+    multilines && context.indent();
+    genNodeList(nodes, context, multilines);
+    multilines && context.deindent();
+    context.push(`]`);
+  }
+  function genNodeList(nodes, context, multilines = false, comma = true) {
+    const { push, newline } = context;
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (isString(node)) {
+        push(node, -3 /* Unknown */);
+      } else if (isArray(node)) {
+        genNodeListAsArray(node, context);
+      } else {
+        genNode(node, context);
+      }
+      if (i < nodes.length - 1) {
+        if (multilines) {
+          comma && push(",");
+          newline();
+        } else {
+          comma && push(", ");
+        }
+      }
+    }
+  }
+  function genNode(node, context) {
+    if (isString(node)) {
+      context.push(node, -3 /* Unknown */);
+      return;
+    }
+    if (isSymbol(node)) {
+      context.push(context.helper(node));
+      return;
+    }
+    switch (node.type) {
+      case 1:
+      case 9:
+      case 11:
+        assert(
+          node.codegenNode != null,
+          `Codegen node is missing for element/if/for node. Apply appropriate transforms first.`
+        );
+        genNode(node.codegenNode, context);
+        break;
+      case 2:
+        genText(node, context);
+        break;
+      case 4:
+        genExpression(node, context);
+        break;
+      case 5:
+        genInterpolation(node, context);
+        break;
+      case 12:
+        genNode(node.codegenNode, context);
+        break;
+      case 8:
+        genCompoundExpression(node, context);
+        break;
+      case 3:
+        genComment(node, context);
+        break;
+      case 13:
+        genVNodeCall(node, context);
+        break;
+      case 14:
+        genCallExpression(node, context);
+        break;
+      case 15:
+        genObjectExpression(node, context);
+        break;
+      case 17:
+        genArrayExpression(node, context);
+        break;
+      case 18:
+        genFunctionExpression(node, context);
+        break;
+      case 19:
+        genConditionalExpression(node, context);
+        break;
+      case 20:
+        genCacheExpression(node, context);
+        break;
+      case 21:
+        genNodeList(node.body, context, true, false);
+        break;
+      // SSR only types
+      case 22:
+        break;
+      case 23:
+        break;
+      case 24:
+        break;
+      case 25:
+        break;
+      case 26:
+        break;
+      /* v8 ignore start */
+      case 10:
+        break;
+      default:
+        {
+          assert(false, `unhandled codegen node type: ${node.type}`);
+          const exhaustiveCheck = node;
+          return exhaustiveCheck;
+        }
+    }
+  }
+  function genText(node, context) {
+    context.push(JSON.stringify(node.content), -3 /* Unknown */, node);
+  }
+  function genExpression(node, context) {
+    const { content, isStatic } = node;
+    context.push(
+      isStatic ? JSON.stringify(content) : content,
+      -3 /* Unknown */,
+      node
+    );
+  }
+  function genInterpolation(node, context) {
+    const { push, helper, pure } = context;
+    if (pure) push(PURE_ANNOTATION);
+    push(`${helper(TO_DISPLAY_STRING)}(`);
+    genNode(node.content, context);
+    push(`)`);
+  }
+  function genCompoundExpression(node, context) {
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+      if (isString(child)) {
+        context.push(child, -3 /* Unknown */);
+      } else {
+        genNode(child, context);
+      }
+    }
+  }
+  function genExpressionAsPropertyKey(node, context) {
+    const { push } = context;
+    if (node.type === 8) {
+      push(`[`);
+      genCompoundExpression(node, context);
+      push(`]`);
+    } else if (node.isStatic) {
+      const text = isSimpleIdentifier(node.content) ? node.content : JSON.stringify(node.content);
+      push(text, -2 /* None */, node);
+    } else {
+      push(`[${node.content}]`, -3 /* Unknown */, node);
+    }
+  }
+  function genComment(node, context) {
+    const { push, helper, pure } = context;
+    if (pure) {
+      push(PURE_ANNOTATION);
+    }
+    push(
+      `${helper(CREATE_COMMENT)}(${JSON.stringify(node.content)})`,
+      -3 /* Unknown */,
+      node
+    );
+  }
+  function genVNodeCall(node, context) {
+    const { push, helper, pure } = context;
+    const {
+      tag,
+      props,
+      children,
+      patchFlag,
+      dynamicProps,
+      directives,
+      isBlock,
+      disableTracking,
+      isComponent
+    } = node;
+    let patchFlagString;
+    if (patchFlag) {
+      {
+        if (patchFlag < 0) {
+          patchFlagString = patchFlag + ` /* ${PatchFlagNames[patchFlag]} */`;
+        } else {
+          const flagNames = Object.keys(PatchFlagNames).map(Number).filter((n) => n > 0 && patchFlag & n).map((n) => PatchFlagNames[n]).join(`, `);
+          patchFlagString = patchFlag + ` /* ${flagNames} */`;
+        }
+      }
+    }
+    if (directives) {
+      push(helper(WITH_DIRECTIVES) + `(`);
+    }
+    if (isBlock) {
+      push(`(${helper(OPEN_BLOCK)}(${disableTracking ? `true` : ``}), `);
+    }
+    if (pure) {
+      push(PURE_ANNOTATION);
+    }
+    const callHelper = isBlock ? getVNodeBlockHelper(context.inSSR, isComponent) : getVNodeHelper(context.inSSR, isComponent);
+    push(helper(callHelper) + `(`, -2 /* None */, node);
+    genNodeList(
+      genNullableArgs([tag, props, children, patchFlagString, dynamicProps]),
+      context
+    );
+    push(`)`);
+    if (isBlock) {
+      push(`)`);
+    }
+    if (directives) {
+      push(`, `);
+      genNode(directives, context);
+      push(`)`);
+    }
+  }
+  function genNullableArgs(args) {
+    let i = args.length;
+    while (i--) {
+      if (args[i] != null) break;
+    }
+    return args.slice(0, i + 1).map((arg) => arg || `null`);
+  }
+  function genCallExpression(node, context) {
+    const { push, helper, pure } = context;
+    const callee = isString(node.callee) ? node.callee : helper(node.callee);
+    if (pure) {
+      push(PURE_ANNOTATION);
+    }
+    push(callee + `(`, -2 /* None */, node);
+    genNodeList(node.arguments, context);
+    push(`)`);
+  }
+  function genObjectExpression(node, context) {
+    const { push, indent, deindent, newline } = context;
+    const { properties } = node;
+    if (!properties.length) {
+      push(`{}`, -2 /* None */, node);
+      return;
+    }
+    const multilines = properties.length > 1 || properties.some((p) => p.value.type !== 4);
+    push(multilines ? `{` : `{ `);
+    multilines && indent();
+    for (let i = 0; i < properties.length; i++) {
+      const { key, value } = properties[i];
+      genExpressionAsPropertyKey(key, context);
+      push(`: `);
+      genNode(value, context);
+      if (i < properties.length - 1) {
+        push(`,`);
+        newline();
+      }
+    }
+    multilines && deindent();
+    push(multilines ? `}` : ` }`);
+  }
+  function genArrayExpression(node, context) {
+    genNodeListAsArray(node.elements, context);
+  }
+  function genFunctionExpression(node, context) {
+    const { push, indent, deindent } = context;
+    const { params, returns, body, newline, isSlot } = node;
+    if (isSlot) {
+      push(`_${helperNameMap[WITH_CTX]}(`);
+    }
+    push(`(`, -2 /* None */, node);
+    if (isArray(params)) {
+      genNodeList(params, context);
+    } else if (params) {
+      genNode(params, context);
+    }
+    push(`) => `);
+    if (newline || body) {
+      push(`{`);
+      indent();
+    }
+    if (returns) {
+      if (newline) {
+        push(`return `);
+      }
+      if (isArray(returns)) {
+        genNodeListAsArray(returns, context);
+      } else {
+        genNode(returns, context);
+      }
+    } else if (body) {
+      genNode(body, context);
+    }
+    if (newline || body) {
+      deindent();
+      push(`}`);
+    }
+    if (isSlot) {
+      push(`)`);
+    }
+  }
+  function genConditionalExpression(node, context) {
+    const { test, consequent, alternate, newline: needNewline } = node;
+    const { push, indent, deindent, newline } = context;
+    if (test.type === 4) {
+      const needsParens = !isSimpleIdentifier(test.content);
+      needsParens && push(`(`);
+      genExpression(test, context);
+      needsParens && push(`)`);
+    } else {
+      push(`(`);
+      genNode(test, context);
+      push(`)`);
+    }
+    needNewline && indent();
+    context.indentLevel++;
+    needNewline || push(` `);
+    push(`? `);
+    genNode(consequent, context);
+    context.indentLevel--;
+    needNewline && newline();
+    needNewline || push(` `);
+    push(`: `);
+    const isNested = alternate.type === 19;
+    if (!isNested) {
+      context.indentLevel++;
+    }
+    genNode(alternate, context);
+    if (!isNested) {
+      context.indentLevel--;
+    }
+    needNewline && deindent(
+      true
+      /* without newline */
+    );
+  }
+  function genCacheExpression(node, context) {
+    const { push, helper, indent, deindent, newline } = context;
+    const { needPauseTracking, needArraySpread } = node;
+    if (needArraySpread) {
+      push(`[...(`);
+    }
+    push(`_cache[${node.index}] || (`);
+    if (needPauseTracking) {
+      indent();
+      push(`${helper(SET_BLOCK_TRACKING)}(-1`);
+      if (node.inVOnce) push(`, true`);
+      push(`),`);
+      newline();
+      push(`(`);
+    }
+    push(`_cache[${node.index}] = `);
+    genNode(node.value, context);
+    if (needPauseTracking) {
+      push(`).cacheIndex = ${node.index},`);
+      newline();
+      push(`${helper(SET_BLOCK_TRACKING)}(1),`);
+      newline();
+      push(`_cache[${node.index}]`);
+      deindent();
+    }
+    push(`)`);
+    if (needArraySpread) {
+      push(`)]`);
+    }
+  }
+
+  const prohibitedKeywordRE = new RegExp(
+    "\\b" + "arguments,await,break,case,catch,class,const,continue,debugger,default,delete,do,else,export,extends,finally,for,function,if,import,let,new,return,super,switch,throw,try,var,void,while,with,yield".split(",").join("\\b|\\b") + "\\b"
+  );
+  const stripStringRE = /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*\$\{|\}(?:[^`\\]|\\.)*`|`(?:[^`\\]|\\.)*`/g;
+  function validateBrowserExpression(node, context, asParams = false, asRawStatements = false) {
+    const exp = node.content;
+    if (!exp.trim()) {
+      return;
+    }
+    try {
+      new Function(
+        asRawStatements ? ` ${exp} ` : `return ${asParams ? `(${exp}) => {}` : `(${exp})`}`
+      );
+    } catch (e) {
+      let message = e.message;
+      const keywordMatch = exp.replace(stripStringRE, "").match(prohibitedKeywordRE);
+      if (keywordMatch) {
+        message = `avoid using JavaScript keyword as property name: "${keywordMatch[0]}"`;
+      }
+      context.onError(
+        createCompilerError(
+          46,
+          node.loc,
+          void 0,
+          message
+        )
+      );
+    }
+  }
+
+  const transformExpression = (node, context) => {
+    if (node.type === 5) {
+      node.content = processExpression(
+        node.content,
+        context
+      );
+    } else if (node.type === 1) {
+      const memo = findDir(node, "memo");
+      for (let i = 0; i < node.props.length; i++) {
+        const dir = node.props[i];
+        if (dir.type === 7 && dir.name !== "for") {
+          const exp = dir.exp;
+          const arg = dir.arg;
+          if (exp && exp.type === 4 && !(dir.name === "on" && arg) && // key has been processed in transformFor(vMemo + vFor)
+          !(memo && arg && arg.type === 4 && arg.content === "key")) {
+            dir.exp = processExpression(
+              exp,
+              context,
+              // slot args must be processed as function params
+              dir.name === "slot"
+            );
+          }
+          if (arg && arg.type === 4 && !arg.isStatic) {
+            dir.arg = processExpression(arg, context);
+          }
+        }
+      }
+    }
+  };
+  function processExpression(node, context, asParams = false, asRawStatements = false, localVars = Object.create(context.identifiers)) {
+    {
+      {
+        validateBrowserExpression(node, context, asParams, asRawStatements);
+      }
+      return node;
+    }
+  }
+
+  const transformIf = createStructuralDirectiveTransform(
+    /^(?:if|else|else-if)$/,
+    (node, dir, context) => {
+      return processIf(node, dir, context, (ifNode, branch, isRoot) => {
+        const siblings = context.parent.children;
+        let i = siblings.indexOf(ifNode);
+        let key = 0;
+        while (i-- >= 0) {
+          const sibling = siblings[i];
+          if (sibling && sibling.type === 9) {
+            key += sibling.branches.length;
+          }
+        }
+        return () => {
+          if (isRoot) {
+            ifNode.codegenNode = createCodegenNodeForBranch(
+              branch,
+              key,
+              context
+            );
+          } else {
+            const parentCondition = getParentCondition(ifNode.codegenNode);
+            parentCondition.alternate = createCodegenNodeForBranch(
+              branch,
+              key + ifNode.branches.length - 1,
+              context
+            );
+          }
+        };
+      });
+    }
+  );
+  function processIf(node, dir, context, processCodegen) {
+    if (dir.name !== "else" && (!dir.exp || !dir.exp.content.trim())) {
+      const loc = dir.exp ? dir.exp.loc : node.loc;
+      context.onError(
+        createCompilerError(28, dir.loc)
+      );
+      dir.exp = createSimpleExpression(`true`, false, loc);
+    }
+    if (dir.exp) {
+      validateBrowserExpression(dir.exp, context);
+    }
+    if (dir.name === "if") {
+      const branch = createIfBranch(node, dir);
+      const ifNode = {
+        type: 9,
+        loc: cloneLoc(node.loc),
+        branches: [branch]
+      };
+      context.replaceNode(ifNode);
+      if (processCodegen) {
+        return processCodegen(ifNode, branch, true);
+      }
+    } else {
+      const siblings = context.parent.children;
+      const comments = [];
+      let i = siblings.indexOf(node);
+      while (i-- >= -1) {
+        const sibling = siblings[i];
+        if (sibling && isCommentOrWhitespace(sibling)) {
+          context.removeNode(sibling);
+          if (sibling.type === 3) {
+            comments.unshift(sibling);
+          }
+          continue;
+        }
+        if (sibling && sibling.type === 9) {
+          if ((dir.name === "else-if" || dir.name === "else") && sibling.branches[sibling.branches.length - 1].condition === void 0) {
+            context.onError(
+              createCompilerError(30, node.loc)
+            );
+          }
+          context.removeNode();
+          const branch = createIfBranch(node, dir);
+          if (comments.length && // #3619 ignore comments if the v-if is direct child of <transition>
+          !(context.parent && context.parent.type === 1 && (context.parent.tag === "transition" || context.parent.tag === "Transition"))) {
+            branch.children = [...comments, ...branch.children];
+          }
+          {
+            const key = branch.userKey;
+            if (key) {
+              sibling.branches.forEach(({ userKey }) => {
+                if (isSameKey(userKey, key)) {
+                  context.onError(
+                    createCompilerError(
+                      29,
+                      branch.userKey.loc
+                    )
+                  );
+                }
+              });
+            }
+          }
+          sibling.branches.push(branch);
+          const onExit = processCodegen && processCodegen(sibling, branch, false);
+          traverseNode(branch, context);
+          if (onExit) onExit();
+          context.currentNode = null;
+        } else {
+          context.onError(
+            createCompilerError(30, node.loc)
+          );
+        }
+        break;
+      }
+    }
+  }
+  function createIfBranch(node, dir) {
+    const isTemplateIf = node.tagType === 3;
+    return {
+      type: 10,
+      loc: node.loc,
+      condition: dir.name === "else" ? void 0 : dir.exp,
+      children: isTemplateIf && !findDir(node, "for") ? node.children : [node],
+      userKey: findProp(node, `key`),
+      isTemplateIf
+    };
+  }
+  function createCodegenNodeForBranch(branch, keyIndex, context) {
+    if (branch.condition) {
+      return createConditionalExpression(
+        branch.condition,
+        createChildrenCodegenNode(branch, keyIndex, context),
+        // make sure to pass in asBlock: true so that the comment node call
+        // closes the current block.
+        createCallExpression(context.helper(CREATE_COMMENT), [
+          '"v-if"' ,
+          "true"
+        ])
+      );
+    } else {
+      return createChildrenCodegenNode(branch, keyIndex, context);
+    }
+  }
+  function createChildrenCodegenNode(branch, keyIndex, context) {
+    const { helper } = context;
+    const keyProperty = createObjectProperty(
+      `key`,
+      createSimpleExpression(
+        `${keyIndex}`,
+        false,
+        locStub,
+        2
+      )
+    );
+    const { children } = branch;
+    const firstChild = children[0];
+    const needFragmentWrapper = children.length !== 1 || firstChild.type !== 1;
+    if (needFragmentWrapper) {
+      if (children.length === 1 && firstChild.type === 11) {
+        const vnodeCall = firstChild.codegenNode;
+        injectProp(vnodeCall, keyProperty, context);
+        return vnodeCall;
+      } else {
+        let patchFlag = 64;
+        if (!branch.isTemplateIf && children.filter((c) => c.type !== 3).length === 1) {
+          patchFlag |= 2048;
+        }
+        return createVNodeCall(
+          context,
+          helper(FRAGMENT),
+          createObjectExpression([keyProperty]),
+          children,
+          patchFlag,
+          void 0,
+          void 0,
+          true,
+          false,
+          false,
+          branch.loc
+        );
+      }
+    } else {
+      const ret = firstChild.codegenNode;
+      const vnodeCall = getMemoedVNodeCall(ret);
+      if (vnodeCall.type === 13) {
+        convertToBlock(vnodeCall, context);
+      }
+      injectProp(vnodeCall, keyProperty, context);
+      return ret;
+    }
+  }
+  function isSameKey(a, b) {
+    if (!a || a.type !== b.type) {
+      return false;
+    }
+    if (a.type === 6) {
+      if (a.value.content !== b.value.content) {
+        return false;
+      }
+    } else {
+      const exp = a.exp;
+      const branchExp = b.exp;
+      if (exp.type !== branchExp.type) {
+        return false;
+      }
+      if (exp.type !== 4 || exp.isStatic !== branchExp.isStatic || exp.content !== branchExp.content) {
+        return false;
+      }
+    }
+    return true;
+  }
+  function getParentCondition(node) {
+    while (true) {
+      if (node.type === 19) {
+        if (node.alternate.type === 19) {
+          node = node.alternate;
+        } else {
+          return node;
+        }
+      } else if (node.type === 20) {
+        node = node.value;
+      }
+    }
+  }
+
+  const transformFor = createStructuralDirectiveTransform(
+    "for",
+    (node, dir, context) => {
+      const { helper, removeHelper } = context;
+      return processFor(node, dir, context, (forNode) => {
+        const renderExp = createCallExpression(helper(RENDER_LIST), [
+          forNode.source
+        ]);
+        const isTemplate = isTemplateNode(node);
+        const memo = findDir(node, "memo");
+        const keyProp = findProp(node, `key`, false, true);
+        keyProp && keyProp.type === 7;
+        let keyExp = keyProp && (keyProp.type === 6 ? keyProp.value ? createSimpleExpression(keyProp.value.content, true) : void 0 : keyProp.exp);
+        const keyProperty = keyProp && keyExp ? createObjectProperty(`key`, keyExp) : null;
+        const isStableFragment = forNode.source.type === 4 && forNode.source.constType > 0;
+        const fragmentFlag = isStableFragment ? 64 : keyProp ? 128 : 256;
+        forNode.codegenNode = createVNodeCall(
+          context,
+          helper(FRAGMENT),
+          void 0,
+          renderExp,
+          fragmentFlag,
+          void 0,
+          void 0,
+          true,
+          !isStableFragment,
+          false,
+          node.loc
+        );
+        return () => {
+          let childBlock;
+          const { children } = forNode;
+          if (isTemplate) {
+            node.children.some((c) => {
+              if (c.type === 1) {
+                const key = findProp(c, "key");
+                if (key) {
+                  context.onError(
+                    createCompilerError(
+                      33,
+                      key.loc
+                    )
+                  );
+                  return true;
+                }
+              }
+            });
+          }
+          const needFragmentWrapper = children.length !== 1 || children[0].type !== 1;
+          const slotOutlet = isSlotOutlet(node) ? node : isTemplate && node.children.length === 1 && isSlotOutlet(node.children[0]) ? node.children[0] : null;
+          if (slotOutlet) {
+            childBlock = slotOutlet.codegenNode;
+            if (isTemplate && keyProperty) {
+              injectProp(childBlock, keyProperty, context);
+            }
+          } else if (needFragmentWrapper) {
+            childBlock = createVNodeCall(
+              context,
+              helper(FRAGMENT),
+              keyProperty ? createObjectExpression([keyProperty]) : void 0,
+              node.children,
+              64,
+              void 0,
+              void 0,
+              true,
+              void 0,
+              false
+            );
+          } else {
+            childBlock = children[0].codegenNode;
+            if (isTemplate && keyProperty) {
+              injectProp(childBlock, keyProperty, context);
+            }
+            if (childBlock.isBlock !== !isStableFragment) {
+              if (childBlock.isBlock) {
+                removeHelper(OPEN_BLOCK);
+                removeHelper(
+                  getVNodeBlockHelper(context.inSSR, childBlock.isComponent)
+                );
+              } else {
+                removeHelper(
+                  getVNodeHelper(context.inSSR, childBlock.isComponent)
+                );
+              }
+            }
+            childBlock.isBlock = !isStableFragment;
+            if (childBlock.isBlock) {
+              helper(OPEN_BLOCK);
+              helper(getVNodeBlockHelper(context.inSSR, childBlock.isComponent));
+            } else {
+              helper(getVNodeHelper(context.inSSR, childBlock.isComponent));
+            }
+          }
+          if (memo) {
+            const loop = createFunctionExpression(
+              createForLoopParams(forNode.parseResult, [
+                createSimpleExpression(`_cached`)
+              ])
+            );
+            loop.body = createBlockStatement([
+              createCompoundExpression([`const _memo = (`, memo.exp, `)`]),
+              createCompoundExpression([
+                `if (_cached && _cached.el`,
+                ...keyExp ? [` && _cached.key === `, keyExp] : [],
+                ` && ${context.helperString(
+                IS_MEMO_SAME
+              )}(_cached, _memo)) return _cached`
+              ]),
+              createCompoundExpression([`const _item = `, childBlock]),
+              createSimpleExpression(`_item.memo = _memo`),
+              createSimpleExpression(`return _item`)
+            ]);
+            renderExp.arguments.push(
+              loop,
+              createSimpleExpression(`_cache`),
+              createSimpleExpression(String(context.cached.length))
+            );
+            context.cached.push(null);
+          } else {
+            renderExp.arguments.push(
+              createFunctionExpression(
+                createForLoopParams(forNode.parseResult),
+                childBlock,
+                true
+              )
+            );
+          }
+        };
+      });
+    }
+  );
+  function processFor(node, dir, context, processCodegen) {
+    if (!dir.exp) {
+      context.onError(
+        createCompilerError(31, dir.loc)
+      );
+      return;
+    }
+    const parseResult = dir.forParseResult;
+    if (!parseResult) {
+      context.onError(
+        createCompilerError(32, dir.loc)
+      );
+      return;
+    }
+    finalizeForParseResult(parseResult, context);
+    const { addIdentifiers, removeIdentifiers, scopes } = context;
+    const { source, value, key, index } = parseResult;
+    const forNode = {
+      type: 11,
+      loc: dir.loc,
+      source,
+      valueAlias: value,
+      keyAlias: key,
+      objectIndexAlias: index,
+      parseResult,
+      children: isTemplateNode(node) ? node.children : [node]
+    };
+    context.replaceNode(forNode);
+    scopes.vFor++;
+    const onExit = processCodegen && processCodegen(forNode);
+    return () => {
+      scopes.vFor--;
+      if (onExit) onExit();
+    };
+  }
+  function finalizeForParseResult(result, context) {
+    if (result.finalized) return;
+    {
+      validateBrowserExpression(result.source, context);
+      if (result.key) {
+        validateBrowserExpression(
+          result.key,
+          context,
+          true
+        );
+      }
+      if (result.index) {
+        validateBrowserExpression(
+          result.index,
+          context,
+          true
+        );
+      }
+      if (result.value) {
+        validateBrowserExpression(
+          result.value,
+          context,
+          true
+        );
+      }
+    }
+    result.finalized = true;
+  }
+  function createForLoopParams({ value, key, index }, memoArgs = []) {
+    return createParamsList([value, key, index, ...memoArgs]);
+  }
+  function createParamsList(args) {
+    let i = args.length;
+    while (i--) {
+      if (args[i]) break;
+    }
+    return args.slice(0, i + 1).map((arg, i2) => arg || createSimpleExpression(`_`.repeat(i2 + 1), false));
+  }
+
+  const defaultFallback = createSimpleExpression(`undefined`, false);
+  const trackSlotScopes = (node, context) => {
+    if (node.type === 1 && (node.tagType === 1 || node.tagType === 3)) {
+      const vSlot = findDir(node, "slot");
+      if (vSlot) {
+        vSlot.exp;
+        context.scopes.vSlot++;
+        return () => {
+          context.scopes.vSlot--;
+        };
+      }
+    }
+  };
+  const buildClientSlotFn = (props, _vForExp, children, loc) => createFunctionExpression(
+    props,
+    children,
+    false,
+    true,
+    children.length ? children[0].loc : loc
+  );
+  function buildSlots(node, context, buildSlotFn = buildClientSlotFn) {
+    context.helper(WITH_CTX);
+    const { children, loc } = node;
+    const slotsProperties = [];
+    const dynamicSlots = [];
+    let hasDynamicSlots = context.scopes.vSlot > 0 || context.scopes.vFor > 0;
+    const onComponentSlot = findDir(node, "slot", true);
+    if (onComponentSlot) {
+      const { arg, exp } = onComponentSlot;
+      if (arg && !isStaticExp(arg)) {
+        hasDynamicSlots = true;
+      }
+      slotsProperties.push(
+        createObjectProperty(
+          arg || createSimpleExpression("default", true),
+          buildSlotFn(exp, void 0, children, loc)
+        )
+      );
+    }
+    let hasTemplateSlots = false;
+    let hasNamedDefaultSlot = false;
+    const implicitDefaultChildren = [];
+    const seenSlotNames = /* @__PURE__ */ new Set();
+    let conditionalBranchIndex = 0;
+    for (let i = 0; i < children.length; i++) {
+      const slotElement = children[i];
+      let slotDir;
+      if (!isTemplateNode(slotElement) || !(slotDir = findDir(slotElement, "slot", true))) {
+        if (slotElement.type !== 3) {
+          implicitDefaultChildren.push(slotElement);
+        }
+        continue;
+      }
+      if (onComponentSlot) {
+        context.onError(
+          createCompilerError(37, slotDir.loc)
+        );
+        break;
+      }
+      hasTemplateSlots = true;
+      const { children: slotChildren, loc: slotLoc } = slotElement;
+      const {
+        arg: slotName = createSimpleExpression(`default`, true),
+        exp: slotProps,
+        loc: dirLoc
+      } = slotDir;
+      let staticSlotName;
+      if (isStaticExp(slotName)) {
+        staticSlotName = slotName ? slotName.content : `default`;
+      } else {
+        hasDynamicSlots = true;
+      }
+      const vFor = findDir(slotElement, "for");
+      const slotFunction = buildSlotFn(slotProps, vFor, slotChildren, slotLoc);
+      let vIf;
+      let vElse;
+      if (vIf = findDir(slotElement, "if")) {
+        hasDynamicSlots = true;
+        dynamicSlots.push(
+          createConditionalExpression(
+            vIf.exp,
+            buildDynamicSlot(slotName, slotFunction, conditionalBranchIndex++),
+            defaultFallback
+          )
+        );
+      } else if (vElse = findDir(
+        slotElement,
+        /^else(?:-if)?$/,
+        true
+        /* allowEmpty */
+      )) {
+        let j = i;
+        let prev;
+        while (j--) {
+          prev = children[j];
+          if (!isCommentOrWhitespace(prev)) {
+            break;
+          }
+        }
+        if (prev && isTemplateNode(prev) && findDir(prev, /^(?:else-)?if$/)) {
+          let conditional = dynamicSlots[dynamicSlots.length - 1];
+          while (conditional.alternate.type === 19) {
+            conditional = conditional.alternate;
+          }
+          conditional.alternate = vElse.exp ? createConditionalExpression(
+            vElse.exp,
+            buildDynamicSlot(
+              slotName,
+              slotFunction,
+              conditionalBranchIndex++
+            ),
+            defaultFallback
+          ) : buildDynamicSlot(slotName, slotFunction, conditionalBranchIndex++);
+        } else {
+          context.onError(
+            createCompilerError(30, vElse.loc)
+          );
+        }
+      } else if (vFor) {
+        hasDynamicSlots = true;
+        const parseResult = vFor.forParseResult;
+        if (parseResult) {
+          finalizeForParseResult(parseResult, context);
+          dynamicSlots.push(
+            createCallExpression(context.helper(RENDER_LIST), [
+              parseResult.source,
+              createFunctionExpression(
+                createForLoopParams(parseResult),
+                buildDynamicSlot(slotName, slotFunction),
+                true
+              )
+            ])
+          );
+        } else {
+          context.onError(
+            createCompilerError(
+              32,
+              vFor.loc
+            )
+          );
+        }
+      } else {
+        if (staticSlotName) {
+          if (seenSlotNames.has(staticSlotName)) {
+            context.onError(
+              createCompilerError(
+                38,
+                dirLoc
+              )
+            );
+            continue;
+          }
+          seenSlotNames.add(staticSlotName);
+          if (staticSlotName === "default") {
+            hasNamedDefaultSlot = true;
+          }
+        }
+        slotsProperties.push(createObjectProperty(slotName, slotFunction));
+      }
+    }
+    if (!onComponentSlot) {
+      const buildDefaultSlotProperty = (props, children2) => {
+        const fn = buildSlotFn(props, void 0, children2, loc);
+        return createObjectProperty(`default`, fn);
+      };
+      if (!hasTemplateSlots) {
+        slotsProperties.push(buildDefaultSlotProperty(void 0, children));
+      } else if (implicitDefaultChildren.length && // #3766
+      // with whitespace: 'preserve', whitespaces between slots will end up in
+      // implicitDefaultChildren. Ignore if all implicit children are whitespaces.
+      !implicitDefaultChildren.every(isWhitespaceText)) {
+        if (hasNamedDefaultSlot) {
+          context.onError(
+            createCompilerError(
+              39,
+              implicitDefaultChildren[0].loc
+            )
+          );
+        } else {
+          slotsProperties.push(
+            buildDefaultSlotProperty(void 0, implicitDefaultChildren)
+          );
+        }
+      }
+    }
+    const slotFlag = hasDynamicSlots ? 2 : hasForwardedSlots(node.children) ? 3 : 1;
+    let slots = createObjectExpression(
+      slotsProperties.concat(
+        createObjectProperty(
+          `_`,
+          // 2 = compiled but dynamic = can skip normalization, but must run diff
+          // 1 = compiled and static = can skip normalization AND diff as optimized
+          createSimpleExpression(
+            slotFlag + (` /* ${slotFlagsText[slotFlag]} */` ),
+            false
+          )
+        )
+      ),
+      loc
+    );
+    if (dynamicSlots.length) {
+      slots = createCallExpression(context.helper(CREATE_SLOTS), [
+        slots,
+        createArrayExpression(dynamicSlots)
+      ]);
+    }
+    return {
+      slots,
+      hasDynamicSlots
+    };
+  }
+  function buildDynamicSlot(name, fn, index) {
+    const props = [
+      createObjectProperty(`name`, name),
+      createObjectProperty(`fn`, fn)
+    ];
+    if (index != null) {
+      props.push(
+        createObjectProperty(`key`, createSimpleExpression(String(index), true))
+      );
+    }
+    return createObjectExpression(props);
+  }
+  function hasForwardedSlots(children) {
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      switch (child.type) {
+        case 1:
+          if (child.tagType === 2 || hasForwardedSlots(child.children)) {
+            return true;
+          }
+          break;
+        case 9:
+          if (hasForwardedSlots(child.branches)) return true;
+          break;
+        case 10:
+        case 11:
+          if (hasForwardedSlots(child.children)) return true;
+          break;
+      }
+    }
+    return false;
+  }
+
+  const directiveImportMap = /* @__PURE__ */ new WeakMap();
+  const transformElement = (node, context) => {
+    return function postTransformElement() {
+      node = context.currentNode;
+      if (!(node.type === 1 && (node.tagType === 0 || node.tagType === 1))) {
+        return;
+      }
+      const { tag, props } = node;
+      const isComponent = node.tagType === 1;
+      let vnodeTag = isComponent ? resolveComponentType(node, context) : `"${tag}"`;
+      const isDynamicComponent = isObject(vnodeTag) && vnodeTag.callee === RESOLVE_DYNAMIC_COMPONENT;
+      let vnodeProps;
+      let vnodeChildren;
+      let patchFlag = 0;
+      let vnodeDynamicProps;
+      let dynamicPropNames;
+      let vnodeDirectives;
+      let shouldUseBlock = (
+        // dynamic component may resolve to plain elements
+        isDynamicComponent || vnodeTag === TELEPORT || vnodeTag === SUSPENSE || !isComponent && // <svg> and <foreignObject> must be forced into blocks so that block
+        // updates inside get proper isSVG flag at runtime. (#639, #643)
+        // This is technically web-specific, but splitting the logic out of core
+        // leads to too much unnecessary complexity.
+        (tag === "svg" || tag === "foreignObject" || tag === "math")
+      );
+      if (props.length > 0) {
+        const propsBuildResult = buildProps(
+          node,
+          context,
+          void 0,
+          isComponent,
+          isDynamicComponent
+        );
+        vnodeProps = propsBuildResult.props;
+        patchFlag = propsBuildResult.patchFlag;
+        dynamicPropNames = propsBuildResult.dynamicPropNames;
+        const directives = propsBuildResult.directives;
+        vnodeDirectives = directives && directives.length ? createArrayExpression(
+          directives.map((dir) => buildDirectiveArgs(dir, context))
+        ) : void 0;
+        if (propsBuildResult.shouldUseBlock) {
+          shouldUseBlock = true;
+        }
+      }
+      if (node.children.length > 0) {
+        if (vnodeTag === KEEP_ALIVE) {
+          shouldUseBlock = true;
+          patchFlag |= 1024;
+          if (node.children.length > 1) {
+            context.onError(
+              createCompilerError(47, {
+                start: node.children[0].loc.start,
+                end: node.children[node.children.length - 1].loc.end,
+                source: ""
+              })
+            );
+          }
+        }
+        const shouldBuildAsSlots = isComponent && // Teleport is not a real component and has dedicated runtime handling
+        vnodeTag !== TELEPORT && // explained above.
+        vnodeTag !== KEEP_ALIVE;
+        if (shouldBuildAsSlots) {
+          const { slots, hasDynamicSlots } = buildSlots(node, context);
+          vnodeChildren = slots;
+          if (hasDynamicSlots) {
+            patchFlag |= 1024;
+          }
+        } else if (node.children.length === 1 && vnodeTag !== TELEPORT) {
+          const child = node.children[0];
+          const type = child.type;
+          const hasDynamicTextChild = type === 5 || type === 8;
+          if (hasDynamicTextChild && getConstantType(child, context) === 0) {
+            patchFlag |= 1;
+          }
+          if (hasDynamicTextChild || type === 2) {
+            vnodeChildren = child;
+          } else {
+            vnodeChildren = node.children;
+          }
+        } else {
+          vnodeChildren = node.children;
+        }
+      }
+      if (dynamicPropNames && dynamicPropNames.length) {
+        vnodeDynamicProps = stringifyDynamicPropNames(dynamicPropNames);
+      }
+      node.codegenNode = createVNodeCall(
+        context,
+        vnodeTag,
+        vnodeProps,
+        vnodeChildren,
+        patchFlag === 0 ? void 0 : patchFlag,
+        vnodeDynamicProps,
+        vnodeDirectives,
+        !!shouldUseBlock,
+        false,
+        isComponent,
+        node.loc
+      );
+    };
+  };
+  function resolveComponentType(node, context, ssr = false) {
+    let { tag } = node;
+    const isExplicitDynamic = isComponentTag(tag);
+    const isProp = findProp(
+      node,
+      "is",
+      false,
+      true
+      /* allow empty */
+    );
+    if (isProp) {
+      if (isExplicitDynamic || false) {
+        let exp;
+        if (isProp.type === 6) {
+          exp = isProp.value && createSimpleExpression(isProp.value.content, true);
+        } else {
+          exp = isProp.exp;
+          if (!exp) {
+            exp = createSimpleExpression(`is`, false, isProp.arg.loc);
+          }
+        }
+        if (exp) {
+          return createCallExpression(context.helper(RESOLVE_DYNAMIC_COMPONENT), [
+            exp
+          ]);
+        }
+      } else if (isProp.type === 6 && isProp.value.content.startsWith("vue:")) {
+        tag = isProp.value.content.slice(4);
+      }
+    }
+    const builtIn = isCoreComponent(tag) || context.isBuiltInComponent(tag);
+    if (builtIn) {
+      if (!ssr) context.helper(builtIn);
+      return builtIn;
+    }
+    context.helper(RESOLVE_COMPONENT);
+    context.components.add(tag);
+    return toValidAssetId(tag, `component`);
+  }
+  function buildProps(node, context, props = node.props, isComponent, isDynamicComponent, ssr = false) {
+    const { tag, loc: elementLoc, children } = node;
+    let properties = [];
+    const mergeArgs = [];
+    const runtimeDirectives = [];
+    const hasChildren = children.length > 0;
+    let shouldUseBlock = false;
+    let patchFlag = 0;
+    let hasRef = false;
+    let hasClassBinding = false;
+    let hasStyleBinding = false;
+    let hasHydrationEventBinding = false;
+    let hasDynamicKeys = false;
+    let hasVnodeHook = false;
+    const dynamicPropNames = [];
+    const pushMergeArg = (arg) => {
+      if (properties.length) {
+        mergeArgs.push(
+          createObjectExpression(dedupeProperties(properties), elementLoc)
+        );
+        properties = [];
+      }
+      if (arg) mergeArgs.push(arg);
+    };
+    const pushRefVForMarker = () => {
+      if (context.scopes.vFor > 0) {
+        properties.push(
+          createObjectProperty(
+            createSimpleExpression("ref_for", true),
+            createSimpleExpression("true")
+          )
+        );
+      }
+    };
+    const analyzePatchFlag = ({ key, value }) => {
+      if (isStaticExp(key)) {
+        const name = key.content;
+        const isEventHandler = isOn(name);
+        if (isEventHandler && (!isComponent || isDynamicComponent) && // omit the flag for click handlers because hydration gives click
+        // dedicated fast path.
+        name.toLowerCase() !== "onclick" && // omit v-model handlers
+        name !== "onUpdate:modelValue" && // omit onVnodeXXX hooks
+        !isReservedProp(name)) {
+          hasHydrationEventBinding = true;
+        }
+        if (isEventHandler && isReservedProp(name)) {
+          hasVnodeHook = true;
+        }
+        if (isEventHandler && value.type === 14) {
+          value = value.arguments[0];
+        }
+        if (value.type === 20 || (value.type === 4 || value.type === 8) && getConstantType(value, context) > 0) {
+          return;
+        }
+        if (name === "ref") {
+          hasRef = true;
+        } else if (name === "class") {
+          hasClassBinding = true;
+        } else if (name === "style") {
+          hasStyleBinding = true;
+        } else if (name !== "key" && !dynamicPropNames.includes(name)) {
+          dynamicPropNames.push(name);
+        }
+        if (isComponent && (name === "class" || name === "style") && !dynamicPropNames.includes(name)) {
+          dynamicPropNames.push(name);
+        }
+      } else {
+        hasDynamicKeys = true;
+      }
+    };
+    for (let i = 0; i < props.length; i++) {
+      const prop = props[i];
+      if (prop.type === 6) {
+        const { loc, name, nameLoc, value } = prop;
+        let isStatic = true;
+        if (name === "ref") {
+          hasRef = true;
+          pushRefVForMarker();
+        }
+        if (name === "is" && (isComponentTag(tag) || value && value.content.startsWith("vue:") || false)) {
+          continue;
+        }
+        properties.push(
+          createObjectProperty(
+            createSimpleExpression(name, true, nameLoc),
+            createSimpleExpression(
+              value ? value.content : "",
+              isStatic,
+              value ? value.loc : loc
+            )
+          )
+        );
+      } else {
+        const { name, arg, exp, loc, modifiers } = prop;
+        const isVBind = name === "bind";
+        const isVOn = name === "on";
+        if (name === "slot") {
+          if (!isComponent) {
+            context.onError(
+              createCompilerError(40, loc)
+            );
+          }
+          continue;
+        }
+        if (name === "once" || name === "memo") {
+          continue;
+        }
+        if (name === "is" || isVBind && isStaticArgOf(arg, "is") && (isComponentTag(tag) || false)) {
+          continue;
+        }
+        if (isVOn && ssr) {
+          continue;
+        }
+        if (
+          // #938: elements with dynamic keys should be forced into blocks
+          isVBind && isStaticArgOf(arg, "key") || // inline before-update hooks need to force block so that it is invoked
+          // before children
+          isVOn && hasChildren && isStaticArgOf(arg, "vue:before-update")
+        ) {
+          shouldUseBlock = true;
+        }
+        if (isVBind && isStaticArgOf(arg, "ref")) {
+          pushRefVForMarker();
+        }
+        if (!arg && (isVBind || isVOn)) {
+          hasDynamicKeys = true;
+          if (exp) {
+            if (isVBind) {
+              pushRefVForMarker();
+              pushMergeArg();
+              mergeArgs.push(exp);
+            } else {
+              pushMergeArg({
+                type: 14,
+                loc,
+                callee: context.helper(TO_HANDLERS),
+                arguments: isComponent ? [exp] : [exp, `true`]
+              });
+            }
+          } else {
+            context.onError(
+              createCompilerError(
+                isVBind ? 34 : 35,
+                loc
+              )
+            );
+          }
+          continue;
+        }
+        if (isVBind && modifiers.some((mod) => mod.content === "prop")) {
+          patchFlag |= 32;
+        }
+        const directiveTransform = context.directiveTransforms[name];
+        if (directiveTransform) {
+          const { props: props2, needRuntime } = directiveTransform(prop, node, context);
+          !ssr && props2.forEach(analyzePatchFlag);
+          if (isVOn && arg && !isStaticExp(arg)) {
+            pushMergeArg(createObjectExpression(props2, elementLoc));
+          } else {
+            properties.push(...props2);
+          }
+          if (needRuntime) {
+            runtimeDirectives.push(prop);
+            if (isSymbol(needRuntime)) {
+              directiveImportMap.set(prop, needRuntime);
+            }
+          }
+        } else if (!isBuiltInDirective(name)) {
+          runtimeDirectives.push(prop);
+          if (hasChildren) {
+            shouldUseBlock = true;
+          }
+        }
+      }
+    }
+    let propsExpression = void 0;
+    if (mergeArgs.length) {
+      pushMergeArg();
+      if (mergeArgs.length > 1) {
+        propsExpression = createCallExpression(
+          context.helper(MERGE_PROPS),
+          mergeArgs,
+          elementLoc
+        );
+      } else {
+        propsExpression = mergeArgs[0];
+      }
+    } else if (properties.length) {
+      propsExpression = createObjectExpression(
+        dedupeProperties(properties),
+        elementLoc
+      );
+    }
+    if (hasDynamicKeys) {
+      patchFlag |= 16;
+    } else {
+      if (hasClassBinding && !isComponent) {
+        patchFlag |= 2;
+      }
+      if (hasStyleBinding && !isComponent) {
+        patchFlag |= 4;
+      }
+      if (dynamicPropNames.length) {
+        patchFlag |= 8;
+      }
+      if (hasHydrationEventBinding) {
+        patchFlag |= 32;
+      }
+    }
+    if (!shouldUseBlock && (patchFlag === 0 || patchFlag === 32) && (hasRef || hasVnodeHook || runtimeDirectives.length > 0)) {
+      patchFlag |= 512;
+    }
+    if (!context.inSSR && propsExpression) {
+      switch (propsExpression.type) {
+        case 15:
+          let classKeyIndex = -1;
+          let styleKeyIndex = -1;
+          let hasDynamicKey = false;
+          for (let i = 0; i < propsExpression.properties.length; i++) {
+            const key = propsExpression.properties[i].key;
+            if (isStaticExp(key)) {
+              if (key.content === "class") {
+                classKeyIndex = i;
+              } else if (key.content === "style") {
+                styleKeyIndex = i;
+              }
+            } else if (!key.isHandlerKey) {
+              hasDynamicKey = true;
+            }
+          }
+          const classProp = propsExpression.properties[classKeyIndex];
+          const styleProp = propsExpression.properties[styleKeyIndex];
+          if (!hasDynamicKey) {
+            if (classProp && !isStaticExp(classProp.value)) {
+              classProp.value = createCallExpression(
+                context.helper(NORMALIZE_CLASS),
+                [classProp.value]
+              );
+            }
+            if (styleProp && // the static style is compiled into an object,
+            // so use `hasStyleBinding` to ensure that it is a dynamic style binding
+            (hasStyleBinding || styleProp.value.type === 4 && styleProp.value.content.trim()[0] === `[` || // v-bind:style and style both exist,
+            // v-bind:style with static literal object
+            styleProp.value.type === 17)) {
+              styleProp.value = createCallExpression(
+                context.helper(NORMALIZE_STYLE),
+                [styleProp.value]
+              );
+            }
+          } else {
+            propsExpression = createCallExpression(
+              context.helper(NORMALIZE_PROPS),
+              [propsExpression]
+            );
+          }
+          break;
+        case 14:
+          break;
+        default:
+          propsExpression = createCallExpression(
+            context.helper(NORMALIZE_PROPS),
+            [
+              createCallExpression(context.helper(GUARD_REACTIVE_PROPS), [
+                propsExpression
+              ])
+            ]
+          );
+          break;
+      }
+    }
+    return {
+      props: propsExpression,
+      directives: runtimeDirectives,
+      patchFlag,
+      dynamicPropNames,
+      shouldUseBlock
+    };
+  }
+  function dedupeProperties(properties) {
+    const knownProps = /* @__PURE__ */ new Map();
+    const deduped = [];
+    for (let i = 0; i < properties.length; i++) {
+      const prop = properties[i];
+      if (prop.key.type === 8 || !prop.key.isStatic) {
+        deduped.push(prop);
+        continue;
+      }
+      const name = prop.key.content;
+      const existing = knownProps.get(name);
+      if (existing) {
+        if (name === "style" || name === "class" || isOn(name)) {
+          mergeAsArray(existing, prop);
+        }
+      } else {
+        knownProps.set(name, prop);
+        deduped.push(prop);
+      }
+    }
+    return deduped;
+  }
+  function mergeAsArray(existing, incoming) {
+    if (existing.value.type === 17) {
+      existing.value.elements.push(incoming.value);
+    } else {
+      existing.value = createArrayExpression(
+        [existing.value, incoming.value],
+        existing.loc
+      );
+    }
+  }
+  function buildDirectiveArgs(dir, context) {
+    const dirArgs = [];
+    const runtime = directiveImportMap.get(dir);
+    if (runtime) {
+      dirArgs.push(context.helperString(runtime));
+    } else {
+      {
+        context.helper(RESOLVE_DIRECTIVE);
+        context.directives.add(dir.name);
+        dirArgs.push(toValidAssetId(dir.name, `directive`));
+      }
+    }
+    const { loc } = dir;
+    if (dir.exp) dirArgs.push(dir.exp);
+    if (dir.arg) {
+      if (!dir.exp) {
+        dirArgs.push(`void 0`);
+      }
+      dirArgs.push(dir.arg);
+    }
+    if (Object.keys(dir.modifiers).length) {
+      if (!dir.arg) {
+        if (!dir.exp) {
+          dirArgs.push(`void 0`);
+        }
+        dirArgs.push(`void 0`);
+      }
+      const trueExpression = createSimpleExpression(`true`, false, loc);
+      dirArgs.push(
+        createObjectExpression(
+          dir.modifiers.map(
+            (modifier) => createObjectProperty(modifier, trueExpression)
+          ),
+          loc
+        )
+      );
+    }
+    return createArrayExpression(dirArgs, dir.loc);
+  }
+  function stringifyDynamicPropNames(props) {
+    let propsNamesString = `[`;
+    for (let i = 0, l = props.length; i < l; i++) {
+      propsNamesString += JSON.stringify(props[i]);
+      if (i < l - 1) propsNamesString += ", ";
+    }
+    return propsNamesString + `]`;
+  }
+  function isComponentTag(tag) {
+    return tag === "component" || tag === "Component";
+  }
+
+  const transformSlotOutlet = (node, context) => {
+    if (isSlotOutlet(node)) {
+      const { children, loc } = node;
+      const { slotName, slotProps } = processSlotOutlet(node, context);
+      const slotArgs = [
+        context.prefixIdentifiers ? `_ctx.$slots` : `$slots`,
+        slotName,
+        "{}",
+        "undefined",
+        "true"
+      ];
+      let expectedLen = 2;
+      if (slotProps) {
+        slotArgs[2] = slotProps;
+        expectedLen = 3;
+      }
+      if (children.length) {
+        slotArgs[3] = createFunctionExpression([], children, false, false, loc);
+        expectedLen = 4;
+      }
+      if (context.scopeId && !context.slotted) {
+        expectedLen = 5;
+      }
+      slotArgs.splice(expectedLen);
+      node.codegenNode = createCallExpression(
+        context.helper(RENDER_SLOT),
+        slotArgs,
+        loc
+      );
+    }
+  };
+  function processSlotOutlet(node, context) {
+    let slotName = `"default"`;
+    let slotProps = void 0;
+    const nonNameProps = [];
+    for (let i = 0; i < node.props.length; i++) {
+      const p = node.props[i];
+      if (p.type === 6) {
+        if (p.value) {
+          if (p.name === "name") {
+            slotName = JSON.stringify(p.value.content);
+          } else {
+            p.name = camelize(p.name);
+            nonNameProps.push(p);
+          }
+        }
+      } else {
+        if (p.name === "bind" && isStaticArgOf(p.arg, "name")) {
+          if (p.exp) {
+            slotName = p.exp;
+          } else if (p.arg && p.arg.type === 4) {
+            const name = camelize(p.arg.content);
+            slotName = p.exp = createSimpleExpression(name, false, p.arg.loc);
+          }
+        } else {
+          if (p.name === "bind" && p.arg && isStaticExp(p.arg)) {
+            p.arg.content = camelize(p.arg.content);
+          }
+          nonNameProps.push(p);
+        }
+      }
+    }
+    if (nonNameProps.length > 0) {
+      const { props, directives } = buildProps(
+        node,
+        context,
+        nonNameProps,
+        false,
+        false
+      );
+      slotProps = props;
+      if (directives.length) {
+        context.onError(
+          createCompilerError(
+            36,
+            directives[0].loc
+          )
+        );
+      }
+    }
+    return {
+      slotName,
+      slotProps
+    };
+  }
+
+  const transformOn$1 = (dir, node, context, augmentor) => {
+    const { loc, modifiers, arg } = dir;
+    if (!dir.exp && !modifiers.length) {
+      context.onError(createCompilerError(35, loc));
+    }
+    let eventName;
+    if (arg.type === 4) {
+      if (arg.isStatic) {
+        let rawName = arg.content;
+        if (rawName.startsWith("vnode")) {
+          context.onError(createCompilerError(52, arg.loc));
+        }
+        if (rawName.startsWith("vue:")) {
+          rawName = `vnode-${rawName.slice(4)}`;
+        }
+        const eventString = node.tagType !== 0 || rawName.startsWith("vnode") || !/[A-Z]/.test(rawName) ? (
+          // for non-element and vnode lifecycle event listeners, auto convert
+          // it to camelCase. See issue #2249
+          toHandlerKey(camelize(rawName))
+        ) : (
+          // preserve case for plain element listeners that have uppercase
+          // letters, as these may be custom elements' custom events
+          `on:${rawName}`
+        );
+        eventName = createSimpleExpression(eventString, true, arg.loc);
+      } else {
+        eventName = createCompoundExpression([
+          `${context.helperString(TO_HANDLER_KEY)}(`,
+          arg,
+          `)`
+        ]);
+      }
+    } else {
+      eventName = arg;
+      eventName.children.unshift(`${context.helperString(TO_HANDLER_KEY)}(`);
+      eventName.children.push(`)`);
+    }
+    let exp = dir.exp;
+    if (exp && !exp.content.trim()) {
+      exp = void 0;
+    }
+    let shouldCache = context.cacheHandlers && !exp && !context.inVOnce;
+    if (exp) {
+      const isMemberExp = isMemberExpression(exp);
+      const isInlineStatement = !(isMemberExp || isFnExpression(exp));
+      const hasMultipleStatements = exp.content.includes(`;`);
+      {
+        validateBrowserExpression(
+          exp,
+          context,
+          false,
+          hasMultipleStatements
+        );
+      }
+      if (isInlineStatement || shouldCache && isMemberExp) {
+        exp = createCompoundExpression([
+          `${isInlineStatement ? `$event` : `${``}(...args)`} => ${hasMultipleStatements ? `{` : `(`}`,
+          exp,
+          hasMultipleStatements ? `}` : `)`
+        ]);
+      }
+    }
+    let ret = {
+      props: [
+        createObjectProperty(
+          eventName,
+          exp || createSimpleExpression(`() => {}`, false, loc)
+        )
+      ]
+    };
+    if (augmentor) {
+      ret = augmentor(ret);
+    }
+    if (shouldCache) {
+      ret.props[0].value = context.cache(ret.props[0].value);
+    }
+    ret.props.forEach((p) => p.key.isHandlerKey = true);
+    return ret;
+  };
+
+  const transformBind = (dir, _node, context) => {
+    const { modifiers, loc } = dir;
+    const arg = dir.arg;
+    let { exp } = dir;
+    if (exp && exp.type === 4 && !exp.content.trim()) {
+      {
+        exp = void 0;
+      }
+    }
+    if (arg.type !== 4) {
+      arg.children.unshift(`(`);
+      arg.children.push(`) || ""`);
+    } else if (!arg.isStatic) {
+      arg.content = arg.content ? `${arg.content} || ""` : `""`;
+    }
+    if (modifiers.some((mod) => mod.content === "camel")) {
+      if (arg.type === 4) {
+        if (arg.isStatic) {
+          arg.content = camelize(arg.content);
+        } else {
+          arg.content = `${context.helperString(CAMELIZE)}(${arg.content})`;
+        }
+      } else {
+        arg.children.unshift(`${context.helperString(CAMELIZE)}(`);
+        arg.children.push(`)`);
+      }
+    }
+    if (!context.inSSR) {
+      if (modifiers.some((mod) => mod.content === "prop")) {
+        injectPrefix(arg, ".");
+      }
+      if (modifiers.some((mod) => mod.content === "attr")) {
+        injectPrefix(arg, "^");
+      }
+    }
+    return {
+      props: [createObjectProperty(arg, exp)]
+    };
+  };
+  const injectPrefix = (arg, prefix) => {
+    if (arg.type === 4) {
+      if (arg.isStatic) {
+        arg.content = prefix + arg.content;
+      } else {
+        arg.content = `\`${prefix}\${${arg.content}}\``;
+      }
+    } else {
+      arg.children.unshift(`'${prefix}' + (`);
+      arg.children.push(`)`);
+    }
+  };
+
+  const transformText = (node, context) => {
+    if (node.type === 0 || node.type === 1 || node.type === 11 || node.type === 10) {
+      return () => {
+        const children = node.children;
+        let currentContainer = void 0;
+        let hasText = false;
+        for (let i = 0; i < children.length; i++) {
+          const child = children[i];
+          if (isText$1(child)) {
+            hasText = true;
+            for (let j = i + 1; j < children.length; j++) {
+              const next = children[j];
+              if (isText$1(next)) {
+                if (!currentContainer) {
+                  currentContainer = children[i] = createCompoundExpression(
+                    [child],
+                    child.loc
+                  );
+                }
+                currentContainer.children.push(` + `, next);
+                children.splice(j, 1);
+                j--;
+              } else {
+                currentContainer = void 0;
+                break;
+              }
+            }
+          }
+        }
+        if (!hasText || // if this is a plain element with a single text child, leave it
+        // as-is since the runtime has dedicated fast path for this by directly
+        // setting textContent of the element.
+        // for component root it's always normalized anyway.
+        children.length === 1 && (node.type === 0 || node.type === 1 && node.tagType === 0 && // #3756
+        // custom directives can potentially add DOM elements arbitrarily,
+        // we need to avoid setting textContent of the element at runtime
+        // to avoid accidentally overwriting the DOM elements added
+        // by the user through custom directives.
+        !node.props.find(
+          (p) => p.type === 7 && !context.directiveTransforms[p.name]
+        ) && // in compat mode, <template> tags with no special directives
+        // will be rendered as a fragment so its children must be
+        // converted into vnodes.
+        true)) {
+          return;
+        }
+        for (let i = 0; i < children.length; i++) {
+          const child = children[i];
+          if (isText$1(child) || child.type === 8) {
+            const callArgs = [];
+            if (child.type !== 2 || child.content !== " ") {
+              callArgs.push(child);
+            }
+            if (!context.ssr && getConstantType(child, context) === 0) {
+              callArgs.push(
+                1 + (` /* ${PatchFlagNames[1]} */` )
+              );
+            }
+            children[i] = {
+              type: 12,
+              content: child,
+              loc: child.loc,
+              codegenNode: createCallExpression(
+                context.helper(CREATE_TEXT),
+                callArgs
+              )
+            };
+          }
+        }
+      };
+    }
+  };
+
+  const seen$1 = /* @__PURE__ */ new WeakSet();
+  const transformOnce = (node, context) => {
+    if (node.type === 1 && findDir(node, "once", true)) {
+      if (seen$1.has(node) || context.inVOnce || context.inSSR) {
+        return;
+      }
+      seen$1.add(node);
+      context.inVOnce = true;
+      context.helper(SET_BLOCK_TRACKING);
+      return () => {
+        context.inVOnce = false;
+        const cur = context.currentNode;
+        if (cur.codegenNode) {
+          cur.codegenNode = context.cache(
+            cur.codegenNode,
+            true,
+            true
+          );
+        }
+      };
+    }
+  };
+
+  const transformModel$1 = (dir, node, context) => {
+    const { exp, arg } = dir;
+    if (!exp) {
+      context.onError(
+        createCompilerError(41, dir.loc)
+      );
+      return createTransformProps();
+    }
+    const rawExp = exp.loc.source.trim();
+    const expString = exp.type === 4 ? exp.content : rawExp;
+    const bindingType = context.bindingMetadata[rawExp];
+    if (bindingType === "props" || bindingType === "props-aliased") {
+      context.onError(createCompilerError(44, exp.loc));
+      return createTransformProps();
+    }
+    if (bindingType === "literal-const" || bindingType === "setup-const") {
+      context.onError(createCompilerError(45, exp.loc));
+      return createTransformProps();
+    }
+    if (!expString.trim() || !isMemberExpression(exp) && true) {
+      context.onError(
+        createCompilerError(42, exp.loc)
+      );
+      return createTransformProps();
+    }
+    const propName = arg ? arg : createSimpleExpression("modelValue", true);
+    const eventName = arg ? isStaticExp(arg) ? `onUpdate:${camelize(arg.content)}` : createCompoundExpression(['"onUpdate:" + ', arg]) : `onUpdate:modelValue`;
+    let assignmentExp;
+    const eventArg = context.isTS ? `($event: any)` : `$event`;
+    {
+      assignmentExp = createCompoundExpression([
+        `${eventArg} => ((`,
+        exp,
+        `) = $event)`
+      ]);
+    }
+    const props = [
+      // modelValue: foo
+      createObjectProperty(propName, dir.exp),
+      // "onUpdate:modelValue": $event => (foo = $event)
+      createObjectProperty(eventName, assignmentExp)
+    ];
+    if (dir.modifiers.length && node.tagType === 1) {
+      const modifiers = dir.modifiers.map((m) => m.content).map((m) => (isSimpleIdentifier(m) ? m : JSON.stringify(m)) + `: true`).join(`, `);
+      const modifiersKey = arg ? isStaticExp(arg) ? `${arg.content}Modifiers` : createCompoundExpression([arg, ' + "Modifiers"']) : `modelModifiers`;
+      props.push(
+        createObjectProperty(
+          modifiersKey,
+          createSimpleExpression(
+            `{ ${modifiers} }`,
+            false,
+            dir.loc,
+            2
+          )
+        )
+      );
+    }
+    return createTransformProps(props);
+  };
+  function createTransformProps(props = []) {
+    return { props };
+  }
+
+  const seen = /* @__PURE__ */ new WeakSet();
+  const transformMemo = (node, context) => {
+    if (node.type === 1) {
+      const dir = findDir(node, "memo");
+      if (!dir || seen.has(node) || context.inSSR) {
+        return;
+      }
+      seen.add(node);
+      return () => {
+        const codegenNode = node.codegenNode || context.currentNode.codegenNode;
+        if (codegenNode && codegenNode.type === 13) {
+          if (node.tagType !== 1) {
+            convertToBlock(codegenNode, context);
+          }
+          node.codegenNode = createCallExpression(context.helper(WITH_MEMO), [
+            dir.exp,
+            createFunctionExpression(void 0, codegenNode),
+            `_cache`,
+            String(context.cached.length)
+          ]);
+          context.cached.push(null);
+        }
+      };
+    }
+  };
+
+  const transformVBindShorthand = (node, context) => {
+    if (node.type === 1) {
+      for (const prop of node.props) {
+        if (prop.type === 7 && prop.name === "bind" && (!prop.exp || // #13930 :foo in in-DOM templates will be parsed into :foo="" by browser
+        prop.exp.type === 4 && !prop.exp.content.trim()) && prop.arg) {
+          const arg = prop.arg;
+          if (arg.type !== 4 || !arg.isStatic) {
+            context.onError(
+              createCompilerError(
+                53,
+                arg.loc
+              )
+            );
+            prop.exp = createSimpleExpression("", true, arg.loc);
+          } else {
+            const propName = camelize(arg.content);
+            if (validFirstIdentCharRE.test(propName[0]) || // allow hyphen first char for https://github.com/vuejs/language-tools/pull/3424
+            propName[0] === "-") {
+              prop.exp = createSimpleExpression(propName, false, arg.loc);
+            }
+          }
+        }
+      }
+    }
+  };
+
+  function getBaseTransformPreset(prefixIdentifiers) {
+    return [
+      [
+        transformVBindShorthand,
+        transformOnce,
+        transformIf,
+        transformMemo,
+        transformFor,
+        ...[],
+        ...[transformExpression] ,
+        transformSlotOutlet,
+        transformElement,
+        trackSlotScopes,
+        transformText
+      ],
+      {
+        on: transformOn$1,
+        bind: transformBind,
+        model: transformModel$1
+      }
+    ];
+  }
+  function baseCompile(source, options = {}) {
+    const onError = options.onError || defaultOnError;
+    const isModuleMode = options.mode === "module";
+    {
+      if (options.prefixIdentifiers === true) {
+        onError(createCompilerError(48));
+      } else if (isModuleMode) {
+        onError(createCompilerError(49));
+      }
+    }
+    const prefixIdentifiers = false;
+    if (options.cacheHandlers) {
+      onError(createCompilerError(50));
+    }
+    if (options.scopeId && !isModuleMode) {
+      onError(createCompilerError(51));
+    }
+    const resolvedOptions = extend({}, options, {
+      prefixIdentifiers
+    });
+    const ast = isString(source) ? baseParse(source, resolvedOptions) : source;
+    const [nodeTransforms, directiveTransforms] = getBaseTransformPreset();
+    transform(
+      ast,
+      extend({}, resolvedOptions, {
+        nodeTransforms: [
+          ...nodeTransforms,
+          ...options.nodeTransforms || []
+          // user transforms
+        ],
+        directiveTransforms: extend(
+          {},
+          directiveTransforms,
+          options.directiveTransforms || {}
+          // user transforms
+        )
+      })
+    );
+    return generate(ast, resolvedOptions);
+  }
+
+  const noopDirectiveTransform = () => ({ props: [] });
+
+  const V_MODEL_RADIO = /* @__PURE__ */ Symbol(`vModelRadio` );
+  const V_MODEL_CHECKBOX = /* @__PURE__ */ Symbol(
+    `vModelCheckbox` 
+  );
+  const V_MODEL_TEXT = /* @__PURE__ */ Symbol(`vModelText` );
+  const V_MODEL_SELECT = /* @__PURE__ */ Symbol(
+    `vModelSelect` 
+  );
+  const V_MODEL_DYNAMIC = /* @__PURE__ */ Symbol(
+    `vModelDynamic` 
+  );
+  const V_ON_WITH_MODIFIERS = /* @__PURE__ */ Symbol(
+    `vOnModifiersGuard` 
+  );
+  const V_ON_WITH_KEYS = /* @__PURE__ */ Symbol(
+    `vOnKeysGuard` 
+  );
+  const V_SHOW = /* @__PURE__ */ Symbol(`vShow` );
+  const TRANSITION = /* @__PURE__ */ Symbol(`Transition` );
+  const TRANSITION_GROUP = /* @__PURE__ */ Symbol(
+    `TransitionGroup` 
+  );
+  registerRuntimeHelpers({
+    [V_MODEL_RADIO]: `vModelRadio`,
+    [V_MODEL_CHECKBOX]: `vModelCheckbox`,
+    [V_MODEL_TEXT]: `vModelText`,
+    [V_MODEL_SELECT]: `vModelSelect`,
+    [V_MODEL_DYNAMIC]: `vModelDynamic`,
+    [V_ON_WITH_MODIFIERS]: `withModifiers`,
+    [V_ON_WITH_KEYS]: `withKeys`,
+    [V_SHOW]: `vShow`,
+    [TRANSITION]: `Transition`,
+    [TRANSITION_GROUP]: `TransitionGroup`
+  });
+
+  let decoder;
+  function decodeHtmlBrowser(raw, asAttr = false) {
+    if (!decoder) {
+      decoder = document.createElement("div");
+    }
+    if (asAttr) {
+      decoder.innerHTML = `<div foo="${raw.replace(/"/g, "&quot;")}">`;
+      return decoder.children[0].getAttribute("foo");
+    } else {
+      decoder.innerHTML = raw;
+      return decoder.textContent;
+    }
+  }
+
+  const parserOptions = {
+    parseMode: "html",
+    isVoidTag,
+    isNativeTag: (tag) => isHTMLTag(tag) || isSVGTag(tag) || isMathMLTag(tag),
+    isPreTag: (tag) => tag === "pre",
+    isIgnoreNewlineTag: (tag) => tag === "pre" || tag === "textarea",
+    decodeEntities: decodeHtmlBrowser ,
+    isBuiltInComponent: (tag) => {
+      if (tag === "Transition" || tag === "transition") {
+        return TRANSITION;
+      } else if (tag === "TransitionGroup" || tag === "transition-group") {
+        return TRANSITION_GROUP;
+      }
+    },
+    // https://html.spec.whatwg.org/multipage/parsing.html#tree-construction-dispatcher
+    getNamespace(tag, parent, rootNamespace) {
+      let ns = parent ? parent.ns : rootNamespace;
+      if (parent && ns === 2) {
+        if (parent.tag === "annotation-xml") {
+          if (tag === "svg") {
+            return 1;
+          }
+          if (parent.props.some(
+            (a) => a.type === 6 && a.name === "encoding" && a.value != null && (a.value.content === "text/html" || a.value.content === "application/xhtml+xml")
+          )) {
+            ns = 0;
+          }
+        } else if (/^m(?:[ions]|text)$/.test(parent.tag) && tag !== "mglyph" && tag !== "malignmark") {
+          ns = 0;
+        }
+      } else if (parent && ns === 1) {
+        if (parent.tag === "foreignObject" || parent.tag === "desc" || parent.tag === "title") {
+          ns = 0;
+        }
+      }
+      if (ns === 0) {
+        if (tag === "svg") {
+          return 1;
+        }
+        if (tag === "math") {
+          return 2;
+        }
+      }
+      return ns;
+    }
+  };
+
+  const transformStyle = (node) => {
+    if (node.type === 1) {
+      node.props.forEach((p, i) => {
+        if (p.type === 6 && p.name === "style" && p.value) {
+          node.props[i] = {
+            type: 7,
+            name: `bind`,
+            arg: createSimpleExpression(`style`, true, p.loc),
+            exp: parseInlineCSS(p.value.content, p.loc),
+            modifiers: [],
+            loc: p.loc
+          };
+        }
+      });
+    }
+  };
+  const parseInlineCSS = (cssText, loc) => {
+    const normalized = parseStringStyle(cssText);
+    return createSimpleExpression(
+      JSON.stringify(normalized),
+      false,
+      loc,
+      3
+    );
+  };
+
+  function createDOMCompilerError(code, loc) {
+    return createCompilerError(
+      code,
+      loc,
+      DOMErrorMessages 
+    );
+  }
+  const DOMErrorMessages = {
+    [54]: `v-html is missing expression.`,
+    [55]: `v-html will override element children.`,
+    [56]: `v-text is missing expression.`,
+    [57]: `v-text will override element children.`,
+    [58]: `v-model can only be used on <input>, <textarea> and <select> elements.`,
+    [59]: `v-model argument is not supported on plain elements.`,
+    [60]: `v-model cannot be used on file inputs since they are read-only. Use a v-on:change listener instead.`,
+    [61]: `Unnecessary value binding used alongside v-model. It will interfere with v-model's behavior.`,
+    [62]: `v-show is missing expression.`,
+    [63]: `<Transition> expects exactly one child element or component.`,
+    [64]: `Tags with side effect (<script> and <style>) are ignored in client component templates.`
+  };
+
+  const transformVHtml = (dir, node, context) => {
+    const { exp, loc } = dir;
+    if (!exp) {
+      context.onError(
+        createDOMCompilerError(54, loc)
+      );
+    }
+    if (node.children.length) {
+      context.onError(
+        createDOMCompilerError(55, loc)
+      );
+      node.children.length = 0;
+    }
+    return {
+      props: [
+        createObjectProperty(
+          createSimpleExpression(`innerHTML`, true, loc),
+          exp || createSimpleExpression("", true)
+        )
+      ]
+    };
+  };
+
+  const transformVText = (dir, node, context) => {
+    const { exp, loc } = dir;
+    if (!exp) {
+      context.onError(
+        createDOMCompilerError(56, loc)
+      );
+    }
+    if (node.children.length) {
+      context.onError(
+        createDOMCompilerError(57, loc)
+      );
+      node.children.length = 0;
+    }
+    return {
+      props: [
+        createObjectProperty(
+          createSimpleExpression(`textContent`, true),
+          exp ? getConstantType(exp, context) > 0 ? exp : createCallExpression(
+            context.helperString(TO_DISPLAY_STRING),
+            [exp],
+            loc
+          ) : createSimpleExpression("", true)
+        )
+      ]
+    };
+  };
+
+  const transformModel = (dir, node, context) => {
+    const baseResult = transformModel$1(dir, node, context);
+    if (!baseResult.props.length || node.tagType === 1) {
+      return baseResult;
+    }
+    if (dir.arg) {
+      context.onError(
+        createDOMCompilerError(
+          59,
+          dir.arg.loc
+        )
+      );
+    }
+    function checkDuplicatedValue() {
+      const value = findDir(node, "bind");
+      if (value && isStaticArgOf(value.arg, "value")) {
+        context.onError(
+          createDOMCompilerError(
+            61,
+            value.loc
+          )
+        );
+      }
+    }
+    const { tag } = node;
+    const isCustomElement = context.isCustomElement(tag);
+    if (tag === "input" || tag === "textarea" || tag === "select" || isCustomElement) {
+      let directiveToUse = V_MODEL_TEXT;
+      let isInvalidType = false;
+      if (tag === "input" || isCustomElement) {
+        const type = findProp(node, `type`);
+        if (type) {
+          if (type.type === 7) {
+            directiveToUse = V_MODEL_DYNAMIC;
+          } else if (type.value) {
+            switch (type.value.content) {
+              case "radio":
+                directiveToUse = V_MODEL_RADIO;
+                break;
+              case "checkbox":
+                directiveToUse = V_MODEL_CHECKBOX;
+                break;
+              case "file":
+                isInvalidType = true;
+                context.onError(
+                  createDOMCompilerError(
+                    60,
+                    dir.loc
+                  )
+                );
+                break;
+              default:
+                checkDuplicatedValue();
+                break;
+            }
+          }
+        } else if (hasDynamicKeyVBind(node)) {
+          directiveToUse = V_MODEL_DYNAMIC;
+        } else {
+          checkDuplicatedValue();
+        }
+      } else if (tag === "select") {
+        directiveToUse = V_MODEL_SELECT;
+      } else {
+        checkDuplicatedValue();
+      }
+      if (!isInvalidType) {
+        baseResult.needRuntime = context.helper(directiveToUse);
+      }
+    } else {
+      context.onError(
+        createDOMCompilerError(
+          58,
+          dir.loc
+        )
+      );
+    }
+    baseResult.props = baseResult.props.filter(
+      (p) => !(p.key.type === 4 && p.key.content === "modelValue")
+    );
+    return baseResult;
+  };
+
+  const isEventOptionModifier = /* @__PURE__ */ makeMap(`passive,once,capture`);
+  const isNonKeyModifier = /* @__PURE__ */ makeMap(
+    // event propagation management
+    `stop,prevent,self,ctrl,shift,alt,meta,exact,middle`
+  );
+  const maybeKeyModifier = /* @__PURE__ */ makeMap("left,right");
+  const isKeyboardEvent = /* @__PURE__ */ makeMap(`onkeyup,onkeydown,onkeypress`);
+  const resolveModifiers = (key, modifiers, context, loc) => {
+    const keyModifiers = [];
+    const nonKeyModifiers = [];
+    const eventOptionModifiers = [];
+    for (let i = 0; i < modifiers.length; i++) {
+      const modifier = modifiers[i].content;
+      if (isEventOptionModifier(modifier)) {
+        eventOptionModifiers.push(modifier);
+      } else {
+        if (maybeKeyModifier(modifier)) {
+          if (isStaticExp(key)) {
+            if (isKeyboardEvent(key.content.toLowerCase())) {
+              keyModifiers.push(modifier);
+            } else {
+              nonKeyModifiers.push(modifier);
+            }
+          } else {
+            keyModifiers.push(modifier);
+            nonKeyModifiers.push(modifier);
+          }
+        } else {
+          if (isNonKeyModifier(modifier)) {
+            nonKeyModifiers.push(modifier);
+          } else {
+            keyModifiers.push(modifier);
+          }
+        }
+      }
+    }
+    return {
+      keyModifiers,
+      nonKeyModifiers,
+      eventOptionModifiers
+    };
+  };
+  const transformClick = (key, event) => {
+    const isStaticClick = isStaticExp(key) && key.content.toLowerCase() === "onclick";
+    return isStaticClick ? createSimpleExpression(event, true) : key.type !== 4 ? createCompoundExpression([
+      `(`,
+      key,
+      `) === "onClick" ? "${event}" : (`,
+      key,
+      `)`
+    ]) : key;
+  };
+  const transformOn = (dir, node, context) => {
+    return transformOn$1(dir, node, context, (baseResult) => {
+      const { modifiers } = dir;
+      if (!modifiers.length) return baseResult;
+      let { key, value: handlerExp } = baseResult.props[0];
+      const { keyModifiers, nonKeyModifiers, eventOptionModifiers } = resolveModifiers(key, modifiers, context, dir.loc);
+      if (nonKeyModifiers.includes("right")) {
+        key = transformClick(key, `onContextmenu`);
+      }
+      if (nonKeyModifiers.includes("middle")) {
+        key = transformClick(key, `onMouseup`);
+      }
+      if (nonKeyModifiers.length) {
+        handlerExp = createCallExpression(context.helper(V_ON_WITH_MODIFIERS), [
+          handlerExp,
+          JSON.stringify(nonKeyModifiers)
+        ]);
+      }
+      if (keyModifiers.length && // if event name is dynamic, always wrap with keys guard
+      (!isStaticExp(key) || isKeyboardEvent(key.content.toLowerCase()))) {
+        handlerExp = createCallExpression(context.helper(V_ON_WITH_KEYS), [
+          handlerExp,
+          JSON.stringify(keyModifiers)
+        ]);
+      }
+      if (eventOptionModifiers.length) {
+        const modifierPostfix = eventOptionModifiers.map(capitalize).join("");
+        key = isStaticExp(key) ? createSimpleExpression(`${key.content}${modifierPostfix}`, true) : createCompoundExpression([`(`, key, `) + "${modifierPostfix}"`]);
+      }
+      return {
+        props: [createObjectProperty(key, handlerExp)]
+      };
+    });
+  };
+
+  const transformShow = (dir, node, context) => {
+    const { exp, loc } = dir;
+    if (!exp) {
+      context.onError(
+        createDOMCompilerError(62, loc)
+      );
+    }
+    return {
+      props: [],
+      needRuntime: context.helper(V_SHOW)
+    };
+  };
+
+  const transformTransition = (node, context) => {
+    if (node.type === 1 && node.tagType === 1) {
+      const component = context.isBuiltInComponent(node.tag);
+      if (component === TRANSITION) {
+        return () => {
+          if (!node.children.length) {
+            return;
+          }
+          if (hasMultipleChildren(node)) {
+            context.onError(
+              createDOMCompilerError(
+                63,
+                {
+                  start: node.children[0].loc.start,
+                  end: node.children[node.children.length - 1].loc.end,
+                  source: ""
+                }
+              )
+            );
+          }
+          const child = node.children[0];
+          if (child.type === 1) {
+            for (const p of child.props) {
+              if (p.type === 7 && p.name === "show") {
+                node.props.push({
+                  type: 6,
+                  name: "persisted",
+                  nameLoc: node.loc,
+                  value: void 0,
+                  loc: node.loc
+                });
+              }
+            }
+          }
+        };
+      }
+    }
+  };
+  function hasMultipleChildren(node) {
+    const children = node.children = node.children.filter(
+      (c) => !isCommentOrWhitespace(c)
+    );
+    const child = children[0];
+    return children.length !== 1 || child.type === 11 || child.type === 9 && child.branches.some(hasMultipleChildren);
+  }
+
+  const ignoreSideEffectTags = (node, context) => {
+    if (node.type === 1 && node.tagType === 0 && (node.tag === "script" || node.tag === "style")) {
+      context.onError(
+        createDOMCompilerError(
+          64,
+          node.loc
+        )
+      );
+      context.removeNode();
+    }
+  };
+
+  function isValidHTMLNesting(parent, child) {
+    if (parent === "template") {
+      return true;
+    }
+    if (parent in onlyValidChildren) {
+      return onlyValidChildren[parent].has(child);
+    }
+    if (child in onlyValidParents) {
+      return onlyValidParents[child].has(parent);
+    }
+    if (parent in knownInvalidChildren) {
+      if (knownInvalidChildren[parent].has(child)) return false;
+    }
+    if (child in knownInvalidParents) {
+      if (knownInvalidParents[child].has(parent)) return false;
+    }
+    return true;
+  }
+  const headings = /* @__PURE__ */ new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
+  const emptySet = /* @__PURE__ */ new Set([]);
+  const onlyValidChildren = {
+    head: /* @__PURE__ */ new Set([
+      "base",
+      "basefront",
+      "bgsound",
+      "link",
+      "meta",
+      "title",
+      "noscript",
+      "noframes",
+      "style",
+      "script",
+      "template"
+    ]),
+    optgroup: /* @__PURE__ */ new Set(["option"]),
+    select: /* @__PURE__ */ new Set(["optgroup", "option", "hr"]),
+    // table
+    table: /* @__PURE__ */ new Set(["caption", "colgroup", "tbody", "tfoot", "thead"]),
+    tr: /* @__PURE__ */ new Set(["td", "th"]),
+    colgroup: /* @__PURE__ */ new Set(["col"]),
+    tbody: /* @__PURE__ */ new Set(["tr"]),
+    thead: /* @__PURE__ */ new Set(["tr"]),
+    tfoot: /* @__PURE__ */ new Set(["tr"]),
+    // these elements can not have any children elements
+    script: emptySet,
+    iframe: emptySet,
+    option: emptySet,
+    textarea: emptySet,
+    style: emptySet,
+    title: emptySet
+  };
+  const onlyValidParents = {
+    // sections
+    html: emptySet,
+    body: /* @__PURE__ */ new Set(["html"]),
+    head: /* @__PURE__ */ new Set(["html"]),
+    // table
+    td: /* @__PURE__ */ new Set(["tr"]),
+    colgroup: /* @__PURE__ */ new Set(["table"]),
+    caption: /* @__PURE__ */ new Set(["table"]),
+    tbody: /* @__PURE__ */ new Set(["table"]),
+    tfoot: /* @__PURE__ */ new Set(["table"]),
+    col: /* @__PURE__ */ new Set(["colgroup"]),
+    th: /* @__PURE__ */ new Set(["tr"]),
+    thead: /* @__PURE__ */ new Set(["table"]),
+    tr: /* @__PURE__ */ new Set(["tbody", "thead", "tfoot"]),
+    // data list
+    dd: /* @__PURE__ */ new Set(["dl", "div"]),
+    dt: /* @__PURE__ */ new Set(["dl", "div"]),
+    // other
+    figcaption: /* @__PURE__ */ new Set(["figure"]),
+    // li: new Set(["ul", "ol"]),
+    summary: /* @__PURE__ */ new Set(["details"]),
+    area: /* @__PURE__ */ new Set(["map"])
+  };
+  const knownInvalidChildren = {
+    p: /* @__PURE__ */ new Set([
+      "address",
+      "article",
+      "aside",
+      "blockquote",
+      "center",
+      "details",
+      "dialog",
+      "dir",
+      "div",
+      "dl",
+      "fieldset",
+      "figure",
+      "footer",
+      "form",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "header",
+      "hgroup",
+      "hr",
+      "li",
+      "main",
+      "nav",
+      "menu",
+      "ol",
+      "p",
+      "pre",
+      "section",
+      "table",
+      "ul"
+    ]),
+    svg: /* @__PURE__ */ new Set([
+      "b",
+      "blockquote",
+      "br",
+      "code",
+      "dd",
+      "div",
+      "dl",
+      "dt",
+      "em",
+      "embed",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+      "hr",
+      "i",
+      "img",
+      "li",
+      "menu",
+      "meta",
+      "ol",
+      "p",
+      "pre",
+      "ruby",
+      "s",
+      "small",
+      "span",
+      "strong",
+      "sub",
+      "sup",
+      "table",
+      "u",
+      "ul",
+      "var"
+    ])
+  };
+  const knownInvalidParents = {
+    a: /* @__PURE__ */ new Set(["a"]),
+    button: /* @__PURE__ */ new Set(["button"]),
+    dd: /* @__PURE__ */ new Set(["dd", "dt"]),
+    dt: /* @__PURE__ */ new Set(["dd", "dt"]),
+    form: /* @__PURE__ */ new Set(["form"]),
+    li: /* @__PURE__ */ new Set(["li"]),
+    h1: headings,
+    h2: headings,
+    h3: headings,
+    h4: headings,
+    h5: headings,
+    h6: headings
+  };
+
+  const validateHtmlNesting = (node, context) => {
+    if (node.type === 1 && node.tagType === 0 && context.parent && context.parent.type === 1 && context.parent.tagType === 0 && !isValidHTMLNesting(context.parent.tag, node.tag)) {
+      const error = new SyntaxError(
+        `<${node.tag}> cannot be child of <${context.parent.tag}>, according to HTML specifications. This can cause hydration errors or potentially disrupt future functionality.`
+      );
+      error.loc = node.loc;
+      context.onWarn(error);
+    }
+  };
+
+  const DOMNodeTransforms = [
+    transformStyle,
+    ...[transformTransition, validateHtmlNesting] 
+  ];
+  const DOMDirectiveTransforms = {
+    cloak: noopDirectiveTransform,
+    html: transformVHtml,
+    text: transformVText,
+    model: transformModel,
+    // override compiler-core
+    on: transformOn,
+    // override compiler-core
+    show: transformShow
+  };
+  function compile(src, options = {}) {
+    return baseCompile(
+      src,
+      extend({}, parserOptions, options, {
+        nodeTransforms: [
+          // ignore <script> and <tag>
+          // this is not put inside DOMNodeTransforms because that list is used
+          // by compiler-ssr to generate vnode fallback branches
+          ignoreSideEffectTags,
+          ...DOMNodeTransforms,
+          ...options.nodeTransforms || []
+        ],
+        directiveTransforms: extend(
+          {},
+          DOMDirectiveTransforms,
+          options.directiveTransforms || {}
+        ),
+        transformHoist: null 
+      })
+    );
+  }
+
+  {
+    initDev();
+  }
+  const compileCache = /* @__PURE__ */ Object.create(null);
+  function compileToFunction(template, options) {
+    if (!isString(template)) {
+      if (template.nodeType) {
+        template = template.innerHTML;
+      } else {
+        warn(`invalid template option: `, template);
+        return NOOP;
+      }
+    }
+    const key = genCacheKey(template, options);
+    const cached = compileCache[key];
+    if (cached) {
+      return cached;
+    }
+    if (template[0] === "#") {
+      const el = document.querySelector(template);
+      if (!el) {
+        warn(`Template element not found or is empty: ${template}`);
+      }
+      template = el ? el.innerHTML : ``;
+    }
+    const opts = extend(
+      {
+        hoistStatic: true,
+        onError: onError ,
+        onWarn: (e) => onError(e, true) 
+      },
+      options
+    );
+    if (!opts.isCustomElement && typeof customElements !== "undefined") {
+      opts.isCustomElement = (tag) => !!customElements.get(tag);
+    }
+    const { code } = compile(template, opts);
+    function onError(err, asWarning = false) {
+      const message = asWarning ? err.message : `Template compilation error: ${err.message}`;
+      const codeFrame = err.loc && generateCodeFrame(
+        template,
+        err.loc.start.offset,
+        err.loc.end.offset
+      );
+      warn(codeFrame ? `${message}
+${codeFrame}` : message);
+    }
+    const render = new Function(code)() ;
+    render._rc = true;
+    return compileCache[key] = render;
+  }
+  registerRuntimeCompiler(compileToFunction);
+
+  exports.BaseTransition = BaseTransition;
+  exports.BaseTransitionPropsValidators = BaseTransitionPropsValidators;
+  exports.Comment = Comment;
+  exports.DeprecationTypes = DeprecationTypes;
+  exports.EffectScope = EffectScope;
+  exports.ErrorCodes = ErrorCodes;
+  exports.ErrorTypeStrings = ErrorTypeStrings;
+  exports.Fragment = Fragment;
+  exports.KeepAlive = KeepAlive;
+  exports.ReactiveEffect = ReactiveEffect;
+  exports.Static = Static;
+  exports.Suspense = Suspense;
+  exports.Teleport = Teleport;
+  exports.Text = Text;
+  exports.TrackOpTypes = TrackOpTypes;
+  exports.Transition = Transition;
+  exports.TransitionGroup = TransitionGroup;
+  exports.TriggerOpTypes = TriggerOpTypes;
+  exports.VueElement = VueElement;
+  exports.assertNumber = assertNumber;
+  exports.callWithAsyncErrorHandling = callWithAsyncErrorHandling;
+  exports.callWithErrorHandling = callWithErrorHandling;
+  exports.camelize = camelize;
+  exports.capitalize = capitalize;
+  exports.cloneVNode = cloneVNode;
+  exports.compatUtils = compatUtils;
+  exports.compile = compileToFunction;
+  exports.computed = computed;
+  exports.createApp = createApp;
+  exports.createBlock = createBlock;
+  exports.createCommentVNode = createCommentVNode;
+  exports.createElementBlock = createElementBlock;
+  exports.createElementVNode = createBaseVNode;
+  exports.createHydrationRenderer = createHydrationRenderer;
+  exports.createPropsRestProxy = createPropsRestProxy;
+  exports.createRenderer = createRenderer;
+  exports.createSSRApp = createSSRApp;
+  exports.createSlots = createSlots;
+  exports.createStaticVNode = createStaticVNode;
+  exports.createTextVNode = createTextVNode;
+  exports.createVNode = createVNode;
+  exports.customRef = customRef;
+  exports.defineAsyncComponent = defineAsyncComponent;
+  exports.defineComponent = defineComponent;
+  exports.defineCustomElement = defineCustomElement;
+  exports.defineEmits = defineEmits;
+  exports.defineExpose = defineExpose;
+  exports.defineModel = defineModel;
+  exports.defineOptions = defineOptions;
+  exports.defineProps = defineProps;
+  exports.defineSSRCustomElement = defineSSRCustomElement;
+  exports.defineSlots = defineSlots;
+  exports.devtools = devtools;
+  exports.effect = effect;
+  exports.effectScope = effectScope;
+  exports.getCurrentInstance = getCurrentInstance;
+  exports.getCurrentScope = getCurrentScope;
+  exports.getCurrentWatcher = getCurrentWatcher;
+  exports.getTransitionRawChildren = getTransitionRawChildren;
+  exports.guardReactiveProps = guardReactiveProps;
+  exports.h = h;
+  exports.handleError = handleError;
+  exports.hasInjectionContext = hasInjectionContext;
+  exports.hydrate = hydrate;
+  exports.hydrateOnIdle = hydrateOnIdle;
+  exports.hydrateOnInteraction = hydrateOnInteraction;
+  exports.hydrateOnMediaQuery = hydrateOnMediaQuery;
+  exports.hydrateOnVisible = hydrateOnVisible;
+  exports.initCustomFormatter = initCustomFormatter;
+  exports.initDirectivesForSSR = initDirectivesForSSR;
+  exports.inject = inject;
+  exports.isMemoSame = isMemoSame;
+  exports.isProxy = isProxy;
+  exports.isReactive = isReactive;
+  exports.isReadonly = isReadonly;
+  exports.isRef = isRef;
+  exports.isRuntimeOnly = isRuntimeOnly;
+  exports.isShallow = isShallow;
+  exports.isVNode = isVNode;
+  exports.markRaw = markRaw;
+  exports.mergeDefaults = mergeDefaults;
+  exports.mergeModels = mergeModels;
+  exports.mergeProps = mergeProps;
+  exports.nextTick = nextTick;
+  exports.nodeOps = nodeOps;
+  exports.normalizeClass = normalizeClass;
+  exports.normalizeProps = normalizeProps;
+  exports.normalizeStyle = normalizeStyle;
+  exports.onActivated = onActivated;
+  exports.onBeforeMount = onBeforeMount;
+  exports.onBeforeUnmount = onBeforeUnmount;
+  exports.onBeforeUpdate = onBeforeUpdate;
+  exports.onDeactivated = onDeactivated;
+  exports.onErrorCaptured = onErrorCaptured;
+  exports.onMounted = onMounted;
+  exports.onRenderTracked = onRenderTracked;
+  exports.onRenderTriggered = onRenderTriggered;
+  exports.onScopeDispose = onScopeDispose;
+  exports.onServerPrefetch = onServerPrefetch;
+  exports.onUnmounted = onUnmounted;
+  exports.onUpdated = onUpdated;
+  exports.onWatcherCleanup = onWatcherCleanup;
+  exports.openBlock = openBlock;
+  exports.patchProp = patchProp;
+  exports.popScopeId = popScopeId;
+  exports.provide = provide;
+  exports.proxyRefs = proxyRefs;
+  exports.pushScopeId = pushScopeId;
+  exports.queuePostFlushCb = queuePostFlushCb;
+  exports.reactive = reactive;
+  exports.readonly = readonly;
+  exports.ref = ref;
+  exports.registerRuntimeCompiler = registerRuntimeCompiler;
+  exports.render = render;
+  exports.renderList = renderList;
+  exports.renderSlot = renderSlot;
+  exports.resolveComponent = resolveComponent;
+  exports.resolveDirective = resolveDirective;
+  exports.resolveDynamicComponent = resolveDynamicComponent;
+  exports.resolveFilter = resolveFilter;
+  exports.resolveTransitionHooks = resolveTransitionHooks;
+  exports.setBlockTracking = setBlockTracking;
+  exports.setDevtoolsHook = setDevtoolsHook;
+  exports.setTransitionHooks = setTransitionHooks;
+  exports.shallowReactive = shallowReactive;
+  exports.shallowReadonly = shallowReadonly;
+  exports.shallowRef = shallowRef;
+  exports.ssrContextKey = ssrContextKey;
+  exports.ssrUtils = ssrUtils;
+  exports.stop = stop;
+  exports.toDisplayString = toDisplayString;
+  exports.toHandlerKey = toHandlerKey;
+  exports.toHandlers = toHandlers;
+  exports.toRaw = toRaw;
+  exports.toRef = toRef;
+  exports.toRefs = toRefs;
+  exports.toValue = toValue;
+  exports.transformVNodeArgs = transformVNodeArgs;
+  exports.triggerRef = triggerRef;
+  exports.unref = unref;
+  exports.useAttrs = useAttrs;
+  exports.useCssModule = useCssModule;
+  exports.useCssVars = useCssVars;
+  exports.useHost = useHost;
+  exports.useId = useId;
+  exports.useModel = useModel;
+  exports.useSSRContext = useSSRContext;
+  exports.useShadowRoot = useShadowRoot;
+  exports.useSlots = useSlots;
+  exports.useTemplateRef = useTemplateRef;
+  exports.useTransitionState = useTransitionState;
+  exports.vModelCheckbox = vModelCheckbox;
+  exports.vModelDynamic = vModelDynamic;
+  exports.vModelRadio = vModelRadio;
+  exports.vModelSelect = vModelSelect;
+  exports.vModelText = vModelText;
+  exports.vShow = vShow;
+  exports.version = version;
+  exports.warn = warn;
+  exports.watch = watch;
+  exports.watchEffect = watchEffect;
+  exports.watchPostEffect = watchPostEffect;
+  exports.watchSyncEffect = watchSyncEffect;
+  exports.withAsyncContext = withAsyncContext;
+  exports.withCtx = withCtx;
+  exports.withDefaults = withDefaults;
+  exports.withDirectives = withDirectives;
+  exports.withKeys = withKeys;
+  exports.withMemo = withMemo;
+  exports.withModifiers = withModifiers;
+  exports.withScopeId = withScopeId;
+
+  return exports;
+
+})({});
